@@ -12,6 +12,7 @@ dependencies = [
     "pfa-parser>=0.1.0",
     "pfa-ir-consolidator>=0.1.0",
     "pfa-categorize>=0.1.0",
+    "pfa-fx>=0.1.0",
     "pandas>=2.0",
     "matplotlib>=3.8",
 ]

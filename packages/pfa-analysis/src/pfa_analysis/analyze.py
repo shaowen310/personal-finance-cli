@@ -34,7 +34,6 @@ import argparse
 import json
 import re
 import sys
-import urllib.request as urllib_request
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
@@ -270,12 +269,13 @@ def classify_cash_flow(txn: Txn) -> str:
 # FX rate retrieval (for consolidated cross-currency conversion to SGD)
 # ---------------------------------------------------------------------------
 #
-# Uses the Frankfurter API (ECB data source, free, no key). Supports historical
-# dates so we can price the statement at its period-end rate rather than "today".
+# FX logic has moved to the standalone ``pfa-fx`` leaf package. Rates are kept in
+# the *canonical* shape shared with pfa-ir-consolidator: SGD per 1 unit of foreign
+# currency (``"SGD": 1.0``). ``convert_to_sgd`` therefore multiplies.
 
-from pfa_analysis.render_md import FX_BASE, convert_to_sgd  # noqa: E402
+from pfa_fx import extract_embedded_fx, fetch_fx_rates as _pfa_fetch_fx_rates  # noqa: E402
+from pfa_analysis.render_md import convert_to_sgd  # noqa: E402  (wrapper-aware; accepts the FX rate dict)
 
-FX_API_BASE = "https://api.frankfurter.app"
 _FX_CACHE: dict[str, dict[str, Any] | None] = {}
 
 _MONTHS = {m: i for i, m in enumerate(
@@ -305,69 +305,41 @@ def parse_date_to_iso(s: Any) -> str | None:
     return None
 
 
-def _normalize_consolidated_fx(fx_block: dict[str, Any]) -> dict[str, Any] | None:
-    """Convert consolidated ``rates_sgd_per_unit`` (SGD per 1 unit of currency)
-    into the Frankfurter-shaped dict (foreign units per 1 SGD) that
-    ``convert_to_sgd`` expects. Returns ``None`` if unusable.
-    """
-    rates_raw = fx_block.get("rates_sgd_per_unit")
-    if not isinstance(rates_raw, dict) or not rates_raw:
-        return None
-    rates: dict[str, float] = {}
-    for k, v in rates_raw.items():
-        ccy = str(k).upper()
-        try:
-            r = float(v)
-        except (TypeError, ValueError):
-            continue
-        if ccy == FX_BASE:
-            rates[ccy] = 1.0
-        elif r and r > 0:
-            rates[ccy] = 1.0 / r  # SGD-per-unit -> units-per-SGD
-    return {
-        "rates": rates,
-        "date": str(fx_block.get("as_of") or fx_block.get("requested_as_of")
-                    or fx_block.get("as_of_date", "")),
-        "source": "consolidated.ir.json (bank-ir-consolidate)",
-    }
-
-
 def _extract_consolidated_fx(data: dict[str, Any]) -> dict[str, Any] | None:
-    """Pull normalized FX rates out of a consolidated IR dict, if present."""
-    fx = data.get("extras", {}).get("consolidation", {}).get("fx")
-    return _normalize_consolidated_fx(fx) if fx else None
+    """Pull FX rates out of a consolidated IR dict, if present.
+
+    The consolidated IR embeds ``extras.consolidation.fx.rates_sgd_per_unit``,
+    which is already in the canonical SGD-per-unit shape, so it is passed
+    through unchanged (no inversion needed). Returns ``None`` if absent.
+    """
+    fx = (data.get("extras") or {}).get("consolidation", {}).get("fx")
+    if not isinstance(fx, dict):
+        return None
+    rates_sgd = fx.get("rates_sgd_per_unit")
+    if not isinstance(rates_sgd, dict) or not rates_sgd:
+        return None
+    as_of = str(fx.get("as_of") or fx.get("requested_as_of")
+                or fx.get("as_of_date", ""))
+    return extract_embedded_fx(rates_sgd, as_of)
 
 
 def fetch_fx_rates(date_str: str) -> dict[str, Any] | None:
-    """Fetch FX rates with ``date_str`` (YYYY-MM-DD) as base = SGD.
+    """Fetch FX rates as of ``date_str`` (YYYY-MM-DD), base = SGD.
 
-    Returns ``{"rates": {CCY: per_1_SGD, ...}, "date": str, "source": str}``
-    or ``None`` on any failure (network / parse / non-success). Callers must
+    Returns ``{"rates": {CCY: SGD per 1 unit, ...}, "date": str, "source": str}``
+    (canonical SGD-per-unit shape) or ``None`` on any failure. Callers must
     handle ``None`` by degrading gracefully (no FX conversion).
     """
     if date_str in _FX_CACHE:
         return _FX_CACHE[date_str]
-    url = f"{FX_API_BASE}/{date_str}?from={FX_BASE}"
     try:
-        req = urllib_request.Request(url, headers={"User-Agent": "personal-finance-analysis/1.0"})
-        with urllib_request.urlopen(req, timeout=5) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-        rates = data.get("rates")
-        if not isinstance(rates, dict):
-            _FX_CACHE[date_str] = None
-            print(f"[WARN] FX API returned no rates for {date_str}", file=sys.stderr)
-            return None
-        result = {
-            "rates": {str(k).upper(): float(v) for k, v in rates.items()},
-            "date": str(data.get("date", date_str)),
-            "source": FX_API_BASE,
-        }
-        _FX_CACHE[date_str] = result
-        return result
+        result = _pfa_fetch_fx_rates(date_str, currencies=[])
     except Exception as e:  # noqa: BLE001 - degrade, never crash the report
-        _FX_CACHE[date_str] = None
         print(f"[WARN] Failed to fetch FX rates for {date_str}: {e}", file=sys.stderr)
+        _FX_CACHE[date_str] = None
         return None
+    _FX_CACHE[date_str] = result
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -1102,7 +1074,7 @@ def build_dashboard_json(
     for r in all_results:
         cb = r.get("_meta_raw", r.get("meta", {})).get("extras", {}).get("consolidation", {}).get("fx")
         if cb:
-            fx_rates = _normalize_consolidated_fx(cb)
+            fx_rates = _extract_consolidated_fx({"extras": {"consolidation": {"fx": cb}}})
             break
     if fx_rates is None:
         iso_dates = [parse_date_to_iso(r.get("_meta_raw", r.get("meta", {})).get("period_end"))

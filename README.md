@@ -10,6 +10,7 @@ Supported banks: **DBS/POSB**, **OCBC**, **UOB**, **ICBC** (Singapore).
 packages/
 ├── pfa-ir-schema/         # Shared IR data models (Account, Transaction, etc.)
 ├── pfa-parser/            # Bank statement PDF parser (detect → extract → IR)
+├── pfa-fx/                # FX rate retrieval & SGD conversion (leaf, stdlib-only)
 ├── pfa-ir-consolidator/   # IR data consolidation & transfer detection
 ├── pfa-categorize/        # Transaction auto-categorization
 └── pfa-analysis/          # Financial analysis & reporting engine

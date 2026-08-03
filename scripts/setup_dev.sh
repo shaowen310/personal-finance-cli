@@ -1,16 +1,20 @@
 #!/bin/bash
-echo "Installing all packages in development mode..."
+set -e
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+echo "Installing all packages in development mode (repo: $REPO_ROOT)..."
 echo "Installing pfa-ir-schema (leaf dependency, must go first)..."
-pip install -e packages/pfa-ir-schema
+pip install -e "$REPO_ROOT/packages/pfa-ir-schema"
+echo "Installing pfa-fx (leaf FX dependency)..."
+pip install -e "$REPO_ROOT/packages/pfa-fx"
 echo "Installing pfa-parser..."
-pip install -e packages/pfa-parser
+pip install -e "$REPO_ROOT/packages/pfa-parser"
 echo "Installing pfa-ir-consolidator..."
-pip install -e packages/pfa-ir-consolidator
+pip install -e "$REPO_ROOT/packages/pfa-ir-consolidator"
 echo "Installing pfa-categorize..."
-pip install -e packages/pfa-categorize
+pip install -e "$REPO_ROOT/packages/pfa-categorize"
 echo "Installing pfa-analysis..."
-pip install -e packages/pfa-analysis
+pip install -e "$REPO_ROOT/packages/pfa-analysis"
 echo "Installing pfa-cli..."
-pip install -e apps/pfa-cli
+pip install -e "$REPO_ROOT/apps/pfa-cli"
 echo ""
 echo "All packages installed. Try: pfa --help"

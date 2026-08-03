@@ -12,29 +12,26 @@ from datetime import datetime
 from typing import Any
 from collections import defaultdict
 
+from pfa_fx import BASE_CCY, convert_to_sgd as _pfa_convert_to_sgd
+
 # ---------------------------------------------------------------------------
 # Shared FX utilities (used by both renderer & analyze.py)
 # ---------------------------------------------------------------------------
 
-FX_BASE = "SGD"
+FX_BASE = BASE_CCY  # canonical base currency (SGD)
 
 
 def convert_to_sgd(amount: float, currency: str, fx_rates: dict[str, Any] | None) -> float | None:
     """Convert ``amount`` in ``currency`` to SGD using ``fx_rates``.
 
+    ``fx_rates`` is the renderer wrapper dict ``{"rates": {CCY: SGD per 1 unit}}``.
     SGD returns unchanged. Returns ``None`` if currency is unknown or
-    ``fx_rates`` is unavailable.
+    ``fx_rates`` is unavailable. Rates are in the canonical SGD-per-unit shape,
+    so foreign -> SGD multiplies.
     """
     if fx_rates is None:
         return None
-    ccy = currency.upper()
-    if ccy == FX_BASE:
-        return amount
-    rate = fx_rates["rates"].get(ccy)
-    if rate is None or rate == 0:
-        return None
-    # Frankfurter "rates" are units of CCY per 1 SGD, so foreign -> SGD divides.
-    return amount / rate
+    return _pfa_convert_to_sgd(amount, currency, fx_rates["rates"])
 
 
 # ---------------------------------------------------------------------------
@@ -191,8 +188,8 @@ def render_report(result: dict[str, Any], consolidated: bool = False,
 
         BUCKET_ORDER = ["Cash", "Time Deposit", "Investment", "Liability", "Dropped"]
         for ccy in used_ccies:
-            rate_units = fx_rates["rates"].get(ccy) if (fx_rates and ccy != FX_BASE) else None
-            rate_disp = f"1 SGD = {rate_units:.4f} {ccy}" if rate_units is not None else "base currency (1 SGD = 1 SGD)"
+            rate_sgd = fx_rates["rates"].get(ccy) if (fx_rates and ccy != FX_BASE) else None
+            rate_disp = f"1 {ccy} = {rate_sgd:.4f} SGD" if rate_sgd is not None else "base currency (1 SGD = 1 SGD)"
             out.append(f"### {ccy}  ")
             out.append(f"_FX: {rate_disp}_\n")
             for bucket in BUCKET_ORDER:
@@ -365,11 +362,11 @@ def render_report(result: dict[str, Any], consolidated: bool = False,
         out.append(
             f"All non-SGD balances above are converted at the statement-period-end rate "
             + f"(**{fx_rates['date']}**) sourced from **{fx_rates['source']}** "
-            + "(ECB reference rates via Frankfurter API). Rates shown are units of foreign "
-            + "currency per 1 SGD, limited to the currencies present in this report.\n"
+            + "(ECB reference rates via Frankfurter API). Rates shown are SGD per 1 unit of "
+            + "foreign currency, limited to the currencies present in this report.\n"
         )
         used_ccies = sorted((set(ccies) | set(mbc)) - {FX_BASE})
-        out.append("| Currency | Rate (1 SGD =) | Date | Source |")
+        out.append("| Currency | Rate (1 CCY = SGD) | Date | Source |")
         out.append("|---|---:|---|---|")
         for ccy in used_ccies:
             rate = fx_rates["rates"].get(ccy)

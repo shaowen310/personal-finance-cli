@@ -6,25 +6,18 @@ duplication) while giving the markdown renderer a clean, render-ready structure.
 Masking is intentionally NOT applied here — descriptions/account numbers stay
 raw so the data remains unmasked; masking happens at render time.
 
-FX rates (``DEFAULT_FX_RATES``) are **not embedded in the statement data**;
-they are sourced externally (e.g. ValutaFX historical mid-market rates) and
-used to estimate SGD-equivalent values for non-SGD accounts in the Net Position
-section. Override by passing a custom ``fx_rates`` dict on construction.
+FX rates (``DEFAULT_FX_RATES``, sourced from the ``pfa-fx`` package) are
+**not embedded in the statement data**; they are sourced externally (e.g.
+ValutaFX historical mid-market rates) and used to estimate SGD-equivalent
+values for non-SGD accounts in the Net Position section. Override by passing a
+custom ``fx_rates`` dict on construction.
 """
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
-# FX rates — SGD per 1 unit of foreign currency, mid-market as of period_to
-# (last business day: 2026-07-17 since 2026-07-18 is a Saturday).
-# Source: ValutaFX historical rates; 1 SGD = 0.7745 USD, 125.82 JPY, 5.2473 CNY.
-DEFAULT_FX_RATES: dict[str, float] = {
-    "SGD": 1.0,
-    "USD": 1.2912,     # 1 / 0.7745
-    "JPY": 0.0079498,  # 1 / 125.82
-    "CNY": 0.19057,    # 1 / 5.2473
-}
+from pfa_fx import DEFAULT_FX_RATES
 
 # Account types that carry FD/investment records instead of spend transactions.
 _NON_TXN_ACCOUNTS = ("fixed_deposit", "unit_trust")
