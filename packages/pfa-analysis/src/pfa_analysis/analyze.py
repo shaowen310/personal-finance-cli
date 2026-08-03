@@ -1,0 +1,1546 @@
+"""Analyse personal balance sheet and cash flow from processed bank-statement JSON.
+
+Supports two input shapes, auto-detected:
+
+1. **`.ir.json` parser output** (the real files in tests/cache):
+       { "statement_meta": {institution, currency, period_from/to,
+         opening_balance?, closing_balance?},
+         "transactions": [{posted_date, amount (signed), currency,
+           description, is_internal_transfer, balance_after, ...}],
+         "account_summary": [{account_no, currency, balance}],
+         "investment_holdings": [{currency, valuation}], "extras": {...} }
+
+2. **Default/simple schema** (used by --demo and the documented example):
+       { "account": {...}, "period": {...}, "balances": {opening, closing},
+         "transactions": [{date, description, amount, currency, type}] }
+
+The skill focuses on balance sheet + cash flow (NOT merchant spending
+categorization). Cash flows are classified only as Income / Expense / Transfer
+In / Transfer Out — the minimum needed for an honest cash-flow statement.
+
+CLI:
+
+    python analyze.py <statement.json> [output.md]
+    python analyze.py <consolidated.ir.json> [output_dir]  # consolidated SGD report
+    python analyze.py --demo                             # embedded synthetic data
+
+Reports contain: Executive Summary, Balance Sheet (cash + deposits +
+investments, per currency), Cash Flow Statement (per currency, reconciled to
+balance), Key Observations, Notes & Caveats.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import sys
+import urllib.request as urllib_request
+from collections import defaultdict
+from pathlib import Path
+from typing import Any
+
+
+# ---------------------------------------------------------------------------
+# Internal transaction model
+# ---------------------------------------------------------------------------
+#
+#   {"date": str, "description": str, "amount": float, "currency": str,
+#    "is_internal_transfer": bool, "balance_after": float | None}
+#
+# `amount` is SIGNED: credits/income positive, debits/spend negative.
+
+Txn = dict[str, Any]
+
+
+# ---------------------------------------------------------------------------
+# Numeric parsing helpers
+# ---------------------------------------------------------------------------
+
+def parse_num(s: Any) -> float | None:
+    """Parse '1,234.56' / '0.00' / 1234.56 into a float; None if not parseable."""
+    if s is None:
+        return None
+    if isinstance(s, (int, float)):
+        return float(s)
+    try:
+        return float(str(s).replace(",", "").strip())
+    except (ValueError, AttributeError):
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Schema adaptation points
+# ---------------------------------------------------------------------------
+
+def normalize_transactions(statement: dict[str, Any]) -> list[Txn]:
+    """Map a raw statement JSON into the internal transaction model.
+
+    Two schemas are supported; dispatched by ``load_statement``. This function
+    handles the **default/simple** schema. Edit field mapping here if your
+    default-schema file differs. The `.ir.json` mapping lives in
+    ``_normalize_ir``.
+    """
+    raw = statement.get("transactions", [])
+    if not isinstance(raw, list):
+        print("[WARN] statement has no 'transactions' array.", file=sys.stderr)
+        return []
+    out: list[Txn] = []
+    for t in raw:
+        date = str(t.get("date", ""))
+        desc = str(t.get("description", t.get("narrative", ""))).strip()
+        amount = float(t.get("amount", 0.0))
+        currency = str(t.get("currency", statement.get("account", {}).get("currency", "")))
+        out.append(
+            {
+                "date": date,
+                "description": desc,
+                "amount": amount,
+                "currency": currency,
+                "is_internal_transfer": False,
+                "balance_after": None,
+            }
+        )
+    return out
+
+
+def _normalize_ir(transactions: list[dict[str, Any]]) -> list[Txn]:
+    """Map `.ir.json` transactions into the internal model."""
+    out: list[Txn] = []
+    for t in transactions:
+        out.append(
+            {
+                "date": str(t.get("posted_date", t.get("value_date", ""))),
+                "description": str(t.get("description", t.get("raw_description", ""))).strip(),
+                "amount": float(t.get("amount", 0.0)),
+                "currency": str(t.get("currency", "")),
+                "is_internal_transfer": bool(t.get("is_internal_transfer", False)),
+                "balance_after": parse_num(t.get("balance_after")),
+            }
+        )
+    return out
+
+
+def _is_consolidated(data: dict[str, Any]) -> bool:
+    """A file is a consolidated IR when its parser name contains 'consolidate'.
+
+    This is the single rule for detecting consolidation: the consolidated
+    parser (``bank-ir-consolidate``) tags every emitted file, so we don't rely
+    on incidental structural hints like the presence of ``accounts[]``.
+    """
+    name = str((data.get("parser") or {}).get("name", "")).lower()
+    return "consolidate" in name
+
+
+def load_statement(path: Path) -> tuple[dict[str, Any], list[Txn]]:
+    """Load a JSON statement and return (meta, normalized transactions).
+
+    Auto-detects the consolidated `.ir.json` (parser name contains
+    ``consolidate``), the single statement `.ir.json` parser output, or the
+    default schema.
+    """
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if _is_consolidated(data):
+        return _load_consolidated_ir(data, path)
+    if "statement_meta" in data:
+        return _load_ir(data)
+    return _load_default(data)
+
+
+def _own_account_digits(accounts: list[dict[str, Any]]) -> set[str]:
+    """Digits-only forms of every known account number (for self-reference detection)."""
+    digits: set[str] = set()
+    for acct in accounts:
+        no = "".join(ch for ch in str(acct.get("account_no", "")) if ch.isdigit())
+        if len(no) >= 4:
+            digits.add(no)
+    return digits
+
+
+def _is_self_reference(description: str, own_digits: set[str]) -> bool:
+    """True if a transaction description references one of the user's own
+    account numbers — i.e. it is a transfer between the user's own accounts
+    (inter-account moves) even when the
+    consolidation module did not flag it ``is_internal_transfer``.
+    """
+    desc = "".join(ch for ch in description.upper() if ch.isdigit())
+    return any(no and no in desc for no in own_digits)
+
+
+def _load_consolidated_ir(data: dict[str, Any], path: Path) -> tuple[dict[str, Any], list[Txn]]:
+    """Load a consolidated IR: flatten transactions across all accounts."""
+    meta = _build_meta(data, path)
+    own_digits = _own_account_digits(data.get("accounts", []))
+    txns: list[Txn] = []
+    for acct in data.get("accounts", []):
+        acct_ccy = acct.get("currency", "")
+        acct_type = acct.get("account_type", "")
+        for t in acct.get("transactions", []):
+            desc = str(t.get("description", "")).strip()
+            is_internal = bool(t.get("is_internal_transfer", False)) or _is_self_reference(desc, own_digits)
+            txns.append({
+                "date": str(t.get("posted_date", t.get("value_date", ""))),
+                "description": desc,
+                "amount": float(t.get("amount", 0.0)),
+                "currency": str(t.get("currency", acct_ccy)),
+                "account_type": acct_type,
+                "is_internal_transfer": is_internal,
+                "balance_after": parse_num(t.get("balance_after")),
+            })
+    return meta, txns
+
+
+def _load_default(data: dict[str, Any]) -> tuple[dict[str, Any], list[Txn]]:
+    meta: dict[str, Any] = {
+        "bank": data.get("account", {}).get("bank", ""),
+        "account_no": data.get("account", {}).get("account_no", ""),
+        "currency": data.get("account", {}).get("currency", ""),
+        "period_start": data.get("period", {}).get("start"),
+        "period_end": data.get("period", {}).get("end"),
+        "opening": data.get("balances", {}).get("opening"),
+        "closing": data.get("balances", {}).get("closing"),
+        "account_summary": [],
+        "investment_holdings": [],
+        "extras": {},
+        "source_file": "",
+    }
+    return meta, normalize_transactions(data)
+
+
+def _load_ir(data: dict[str, Any]) -> tuple[dict[str, Any], list[Txn]]:
+    sm = data.get("statement_meta", {})
+    meta: dict[str, Any] = {
+        "bank": sm.get("institution", ""),
+        "account_no": sm.get("account_id", ""),
+        "currency": sm.get("currency", ""),
+        "period_start": sm.get("period_from"),
+        "period_end": sm.get("period_to"),
+        "opening": sm.get("opening_balance"),
+        "closing": sm.get("closing_balance"),
+        "account_summary": data.get("account_summary", []),
+        "investment_holdings": data.get("investment_holdings", []),
+        "extras": data.get("extras", {}),
+        "source_file": data.get("source_file", ""),
+    }
+    return meta, _normalize_ir(data.get("transactions", []))
+
+
+# ---------------------------------------------------------------------------
+# Cash-flow classification (balance-sheet relevant only)
+# ---------------------------------------------------------------------------
+#
+# Income / Expense / Transfer In / Transfer Out. No merchant categories.
+
+TRANSFER_KEYWORDS = [
+    "FUNDS TRANSFER", "FDWD", "FIXED DEPOSIT", "TOP-UP TO PAYLAH",
+    "TIME DEPO", "ROLLOVER", "PAYMENT BY INTERNET",
+]
+
+
+# Account types that follow the credit-card sign convention: a *positive*
+# amount is a charge (debit / outflow), a negative amount is a payment / credit.
+_CREDIT_LIKE_ACCOUNTS = {"credit_card"}
+
+
+def _is_debit(txn: Txn) -> bool:
+    """True when ``txn`` is a debit (outflow: expense or transfer out).
+
+    The sign convention differs by account type:
+      * current / savings / fixed / investment accounts: negative = debit.
+      * credit_card accounts: positive = charge = debit (banking convention).
+    Transactions without an ``account_type`` (legacy single-statement IR)
+    fall back to the standard negative-is-debit rule.
+    """
+    at = str(txn.get("account_type", "")).lower()
+    if at in _CREDIT_LIKE_ACCOUNTS:
+        return txn["amount"] > 0
+    return txn["amount"] < 0
+
+
+def classify_cash_flow(txn: Txn) -> str:
+    """Return one of Income / Expense / Transfer In / Transfer Out."""
+    if txn.get("is_internal_transfer"):
+        return "Transfer Out" if _is_debit(txn) else "Transfer In"
+    u = txn["description"].upper()
+    if any(k in u for k in TRANSFER_KEYWORDS):
+        return "Transfer Out" if _is_debit(txn) else "Transfer In"
+    return "Expense" if _is_debit(txn) else "Income"
+
+
+# ---------------------------------------------------------------------------
+# FX rate retrieval (for consolidated cross-currency conversion to SGD)
+# ---------------------------------------------------------------------------
+#
+# Uses the Frankfurter API (ECB data source, free, no key). Supports historical
+# dates so we can price the statement at its period-end rate rather than "today".
+
+from pfa_analysis.render_md import FX_BASE, convert_to_sgd  # noqa: E402
+
+FX_API_BASE = "https://api.frankfurter.app"
+_FX_CACHE: dict[str, dict[str, Any] | None] = {}
+
+_MONTHS = {m: i for i, m in enumerate(
+    ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"], start=1)}
+
+
+def parse_date_to_iso(s: Any) -> str | None:
+    """Normalise a statement period string to ``YYYY-MM-DD`` for the FX API.
+
+    Handles the variants seen in real `.ir.json` files:
+      ``2026-06-30`` (ISO), ``2026/06/30`` (slashes), ``30 JUN 2026`` (DD MON YYYY).
+    Returns ``None`` if unparseable.
+    """
+    if not s:
+        return None
+    s = str(s).strip().upper()
+    # ISO or slash form: YYYY-MM-DD / YYYY/MM/DD
+    m = re.fullmatch(r"(\d{4})[-/](\d{2})[-/](\d{2})", s)
+    if m:
+        return f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
+    # DD MON YYYY
+    m = re.fullmatch(r"(\d{1,2})\s+([A-Z]{3})\s+(\d{4})", s)
+    if m:
+        mon = _MONTHS.get(m.group(2))
+        if mon:
+            return f"{m.group(3)}-{mon:02d}-{int(m.group(1)):02d}"
+    return None
+
+
+def _normalize_consolidated_fx(fx_block: dict[str, Any]) -> dict[str, Any] | None:
+    """Convert consolidated ``rates_sgd_per_unit`` (SGD per 1 unit of currency)
+    into the Frankfurter-shaped dict (foreign units per 1 SGD) that
+    ``convert_to_sgd`` expects. Returns ``None`` if unusable.
+    """
+    rates_raw = fx_block.get("rates_sgd_per_unit")
+    if not isinstance(rates_raw, dict) or not rates_raw:
+        return None
+    rates: dict[str, float] = {}
+    for k, v in rates_raw.items():
+        ccy = str(k).upper()
+        try:
+            r = float(v)
+        except (TypeError, ValueError):
+            continue
+        if ccy == FX_BASE:
+            rates[ccy] = 1.0
+        elif r and r > 0:
+            rates[ccy] = 1.0 / r  # SGD-per-unit -> units-per-SGD
+    return {
+        "rates": rates,
+        "date": str(fx_block.get("as_of") or fx_block.get("requested_as_of")
+                    or fx_block.get("as_of_date", "")),
+        "source": "consolidated.ir.json (bank-ir-consolidate)",
+    }
+
+
+def _extract_consolidated_fx(data: dict[str, Any]) -> dict[str, Any] | None:
+    """Pull normalized FX rates out of a consolidated IR dict, if present."""
+    fx = data.get("extras", {}).get("consolidation", {}).get("fx")
+    return _normalize_consolidated_fx(fx) if fx else None
+
+
+def fetch_fx_rates(date_str: str) -> dict[str, Any] | None:
+    """Fetch FX rates with ``date_str`` (YYYY-MM-DD) as base = SGD.
+
+    Returns ``{"rates": {CCY: per_1_SGD, ...}, "date": str, "source": str}``
+    or ``None`` on any failure (network / parse / non-success). Callers must
+    handle ``None`` by degrading gracefully (no FX conversion).
+    """
+    if date_str in _FX_CACHE:
+        return _FX_CACHE[date_str]
+    url = f"{FX_API_BASE}/{date_str}?from={FX_BASE}"
+    try:
+        req = urllib_request.Request(url, headers={"User-Agent": "personal-finance-analysis/1.0"})
+        with urllib_request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        rates = data.get("rates")
+        if not isinstance(rates, dict):
+            _FX_CACHE[date_str] = None
+            print(f"[WARN] FX API returned no rates for {date_str}", file=sys.stderr)
+            return None
+        result = {
+            "rates": {str(k).upper(): float(v) for k, v in rates.items()},
+            "date": str(data.get("date", date_str)),
+            "source": FX_API_BASE,
+        }
+        _FX_CACHE[date_str] = result
+        return result
+    except Exception as e:  # noqa: BLE001 - degrade, never crash the report
+        _FX_CACHE[date_str] = None
+        print(f"[WARN] Failed to fetch FX rates for {date_str}: {e}", file=sys.stderr)
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Metrics
+# ---------------------------------------------------------------------------
+
+def compute_metrics(txns: list[Txn], meta: dict[str, Any], ccy: str,
+                    opening_override: float | None = None,
+                    closing_override: float | None = None) -> dict[str, Any]:
+    """Compute balance-sheet + cash-flow metrics for one currency in a statement.
+
+    When ``opening_override``/``closing_override`` are supplied (e.g. derived
+    from a consolidated ``accounts[].opening_balance``), they are used directly
+    instead of inferring from ``meta`` or the first/last ``balance_after``.
+    """
+    income = expense = transfer_in = transfer_out = 0.0
+    for t in txns:
+        c = classify_cash_flow(t)
+        a = abs(t["amount"])  # classify_cash_flow already set the direction
+        if c == "Income":
+            income += a
+        elif c == "Transfer In":
+            transfer_in += a
+        elif c == "Expense":
+            expense += a
+        elif c == "Transfer Out":
+            transfer_out += a
+
+    total_inflow = income + transfer_in
+    total_outflow = expense + transfer_out
+    net_change_cash = total_inflow - total_outflow
+    net_operating = income - expense
+    savings_rate = net_operating / income if income > 0 else 0.0
+
+    # Opening / closing for this currency.
+    if opening_override is not None and closing_override is not None:
+        opening = opening_override
+        closing = closing_override
+    elif meta.get("currency") == ccy and meta.get("opening") is not None:
+        opening = float(meta["opening"])
+        closing = float(meta["closing"])
+    elif txns:
+        opening = (txns[0]["balance_after"] or 0.0) - txns[0]["amount"]
+        closing = txns[-1]["balance_after"] or 0.0
+    else:
+        opening = closing = None
+
+    balance_change = (closing - opening) if (opening is not None and closing is not None) else None
+    recon_ok = abs(balance_change - net_change_cash) < 0.005 if balance_change is not None else None
+
+    return {
+        "income": income, "expense": expense, "transfer_in": transfer_in,
+        "transfer_out": transfer_out, "total_inflow": total_inflow,
+        "total_outflow": total_outflow, "net_change_cash": net_change_cash,
+        "net_operating": net_operating, "savings_rate": savings_rate,
+        "opening": opening, "closing": closing, "balance_change": balance_change,
+        "reconciliation_ok": recon_ok, "txn_count": len(txns),
+    }
+
+
+def build_assets(meta: dict[str, Any], metrics_by_ccy: dict[str, dict[str, Any]]) -> dict[str, dict[str, float]]:
+    """Assemble balance-sheet assets: cash, time deposits, investments (per currency).
+    Credit-card balances are treated as liabilities (deducted from net worth)."""
+    cash: dict[str, float] = defaultdict(float)
+    liabilities: dict[str, float] = defaultdict(float)
+    # Account types that are NOT liquid cash (handled via time_deposits /
+    # investment_holdings instead) — keep them out of the cash bucket so we
+    # don't double count.
+    _NON_CASH = _NON_CASH_ACCOUNT_TYPES
+    if meta.get("account_summary"):
+        for a in meta["account_summary"]:
+            at = str(a.get("account_type", "")).lower()
+            if at in _NON_CASH:
+                continue
+            if at in _LIABILITY_ACCOUNT_TYPES:
+                c = a.get("currency")
+                b = parse_num(a.get("closing_balance"))
+                if c and b is not None:
+                    liabilities[c] += abs(b)
+                continue
+            c = a.get("currency")
+            b = parse_num(a.get("closing_balance"))
+            if c and b is not None:
+                cash[c] += b
+    else:
+        for ccy, m in metrics_by_ccy.items():
+            if m["closing"] is not None:
+                cash[ccy] += m["closing"]
+
+    time_dep: dict[str, float] = defaultdict(float)
+    for td in meta.get("extras", {}).get("time_deposits", []):
+        b = parse_num(td.get("closing_balance"))
+        if b is None:
+            principal = parse_num(td.get("principal")) or 0.0
+            interest = parse_num(td.get("interest_amount")) or 0.0
+            b = principal + interest
+        c = td.get("currency", "SGD")
+        time_dep[c] += b
+
+    inv: dict[str, float] = defaultdict(float)
+    for h in meta.get("investment_holdings", []):
+        c = h.get("currency")
+        b = parse_num(h.get("valuation"))
+        if c and b is not None:
+            inv[c] += b
+    for u in meta.get("extras", {}).get("unit_trusts", []):
+        b = parse_num(u.get("market_value"))
+        if b is not None:
+            inv["SGD"] += b
+
+    return {"cash": dict(cash), "time_deposits": dict(time_dep), "investments": dict(inv), "liabilities": dict(liabilities)}
+
+
+def build_balance_sheet_drilldown(raw: dict[str, Any]) -> list[dict[str, Any]]:
+    """Account-level breakdown that feeds the Balance Sheet Drill-Down section.
+
+    Mirrors the bucket assignment in :func:`build_assets` exactly so the
+    drill-down reconciles with the Balance Sheet totals. Each row is::
+
+        {"currency", "institution", "account_no", "account_type", "bucket",
+         "native_value", "derivation"}
+
+    ``bucket`` is one of ``Cash`` / ``Time Deposit`` / ``Investment`` /
+    ``Dropped``. ``Dropped`` flags accounts that contribute nothing to the
+    balance sheet (e.g. a liquid account whose ``closing_balance`` is null).
+    """
+    rows: list[dict[str, Any]] = []
+
+    def _add(ccy: str, inst: str, acc: str, at: str, bucket: str,
+             value: float, deriv: str) -> None:
+        rows.append({
+            "currency": ccy, "institution": inst, "account_no": acc,
+            "account_type": at, "bucket": bucket, "native_value": value,
+            "derivation": deriv,
+        })
+
+    # ---- Consolidated IR (accounts[] with closing_balance / fd_records / holdings)
+    accounts = raw.get("accounts")
+    if accounts is not None:
+        for acct in accounts:
+            ccy = acct.get("currency", "")
+            inst = acct.get("institution", "")
+            at = str(acct.get("account_type", "")).lower()
+            acc = acct.get("account_no", "")
+            cb = parse_num(acct.get("closing_balance"))
+            if at in _LIABILITY_ACCOUNT_TYPES:
+                if cb is not None:
+                    _add(ccy, inst, acc, at, "Liability", abs(cb),
+                         "account closing_balance (credit-card debt)")
+                else:
+                    _add(ccy, inst, acc, at, "Dropped", 0.0,
+                         "DROPPED: credit_card closing_balance is null")
+            elif at in _NON_CASH_ACCOUNT_TYPES:
+                if at in _FD_ACCOUNT_TYPES:
+                    if cb is not None:
+                        _add(ccy, inst, acc, at, "Time Deposit", cb,
+                             "account closing_balance")
+                    else:
+                        _add(ccy, inst, acc, at, "Time Deposit", 0.0,
+                             "DROPPED: fixed_deposit closing_balance is null")
+                else:
+                    holdings = acct.get("investment_holdings", [])
+                    val = sum(parse_num(h.get("valuation")) or 0.0 for h in holdings)
+                    if val > 0 or holdings:
+                        _add(ccy, inst, acc, at, "Investment", val,
+                             "investment_holdings valuation (sum)")
+                    else:
+                        _add(ccy, inst, acc, at, "Dropped", cb if cb is not None else 0.0,
+                             f"DROPPED: non-cash, no holdings (closing_balance={acct.get('closing_balance')})")
+            else:
+                if cb is not None:
+                    _add(ccy, inst, acc, at, "Cash", cb, "account closing_balance")
+                else:
+                    _add(ccy, inst, acc, at, "Dropped", 0.0,
+                         "DROPPED: liquid account, closing_balance is null")
+        return rows
+
+    # ---- Individual statement (account_summary[] with balance)
+    stmt_inst = raw.get("institution", "")
+    for a in raw.get("account_summary", []):
+        ccy = a.get("currency", "")
+        inst = a.get("institution", stmt_inst)
+        at = str(a.get("account_type", "")).lower()
+        acc = a.get("account_no", "")
+        bal = parse_num(a.get("closing_balance")) or 0.0
+        if at in _LIABILITY_ACCOUNT_TYPES:
+            _add(ccy, inst, acc, at, "Liability", abs(bal), "account_summary.balance (credit-card debt)")
+        elif at in _FD_ACCOUNT_TYPES:
+            _add(ccy, inst, acc, at, "Time Deposit", bal, "account_summary.balance")
+        elif at in _NON_CASH_ACCOUNT_TYPES:
+            _add(ccy, inst, acc, at, "Investment", bal, "account_summary.balance")
+        else:
+            _add(ccy, inst, acc, at, "Cash", bal, "account_summary.balance")
+    return rows
+
+
+def _analyze_file(path: Path) -> dict[str, Any]:
+    """Analyze one statement file into a structured result.
+
+    Dispatches to the consolidated analysis path (account-balance based) when
+    the IR is consolidated, or the per-file analysis path otherwise.
+    """
+    raw = json.loads(Path(path).read_text(encoding="utf-8"))
+    meta, txns = load_statement(path)
+    if meta.get("_consolidated"):
+        return _analyze_consolidated(raw, meta, txns, path)
+    return analyze_statement(raw, meta, txns, path)
+
+
+def _analyze_consolidated(raw: dict[str, Any], meta: dict[str, Any],
+                          txns: list[Txn], path: Path) -> dict[str, Any]:
+    """Consolidated IR: opening/closing come from account balances, not txns."""
+    by_ccy: dict[str, list[Txn]] = defaultdict(list)
+    for t in txns:
+        by_ccy[t["currency"]].append(t)
+    for lst in by_ccy.values():
+        lst.sort(key=lambda x: x["date"])
+
+    # Opening/closing per currency from account balances (cash + credit-card
+    # accounts) — authoritative for a consolidated IR, so we don't infer from
+    # transaction balance_after.
+    opening_by_ccy: dict[str, float] = {}
+    closing_by_ccy: dict[str, float] = {}
+    for a in meta["account_summary"]:
+        atype = str(a.get("account_type", "")).lower()
+        if atype in ("fixed", "time", "securities", "investment"):
+            continue
+        ccy = a.get("currency", "")
+        op = parse_num(a.get("opening_balance"))
+        cl = parse_num(a.get("closing_balance"))
+        if ccy:
+            opening_by_ccy[ccy] = opening_by_ccy.get(ccy, 0.0) + (op or 0.0)
+            closing_by_ccy[ccy] = closing_by_ccy.get(ccy, 0.0) + (cl or 0.0)
+
+    metrics_by_ccy: dict[str, dict[str, Any]] = {}
+    for ccy, lst in by_ccy.items():
+        op = opening_by_ccy.get(ccy)
+        cl = closing_by_ccy.get(ccy)
+        metrics_by_ccy[ccy] = compute_metrics(
+            lst, meta, ccy,
+            opening_override=op if (op is not None and cl is not None) else None,
+            closing_override=cl if (op is not None and cl is not None) else None,
+        )
+
+    assets = build_assets(meta, metrics_by_ccy)
+    drilldown = build_balance_sheet_drilldown(raw)
+    return {
+        "meta": meta, "metrics_by_ccy": metrics_by_ccy, "assets": assets,
+        "drilldown": drilldown, "has_txns": bool(txns), "source": path.name,
+    }
+
+
+def analyze_statement(raw: dict[str, Any], meta: dict[str, Any],
+                      txns: list[Txn], path: Path) -> dict[str, Any]:
+    """Per-file IR: metrics inferred from statement_meta / transaction flow."""
+    by_ccy: dict[str, list[Txn]] = defaultdict(list)
+    for t in txns:
+        by_ccy[t["currency"]].append(t)
+    for lst in by_ccy.values():
+        lst.sort(key=lambda x: x["date"])
+
+    metrics_by_ccy: dict[str, dict[str, Any]] = {}
+    for ccy, lst in by_ccy.items():
+        metrics_by_ccy[ccy] = compute_metrics(lst, meta, ccy)
+
+    assets = build_assets(meta, metrics_by_ccy)
+    drilldown = build_balance_sheet_drilldown(raw)
+    return {
+        "meta": meta, "metrics_by_ccy": metrics_by_ccy, "assets": assets,
+        "drilldown": drilldown, "has_txns": bool(txns), "source": path.name,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Report rendering — delegated to render_md.py
+# ---------------------------------------------------------------------------
+
+from pfa_analysis.render_md import render_report, fmt  # noqa: E402
+
+# Demo data (default schema, single currency)
+# ---------------------------------------------------------------------------
+
+def demo_statements() -> list[tuple[dict[str, Any], list[Txn]]]:
+    base: dict[str, Any] = {"account": {"bank": "OCBC", "account_no": "xxx", "currency": "SGD"}}
+    months = [
+        ("2026-04", [
+            ("2026-04-01", "SALARY", 5000.00),
+            ("2026-04-05", "GIANT", -120.40),
+            ("2026-04-12", "GRAB", -33.10),
+            ("2026-04-20", "TRANSFER TO DBS", -500.00),
+        ]),
+        ("2026-05", [
+            ("2026-05-01", "SALARY", 5200.00),
+            ("2026-05-04", "NTUC", -150.20),
+            ("2026-05-11", "BUS/MRT", -16.23),
+            ("2026-05-15", "TRANSFER TO DBS", -600.00),
+            ("2026-05-22", "TRANSFER FROM UOB", 300.00),
+        ]),
+    ]
+    result = []
+    opening = 1000.0
+    for month, txns in months:
+        income = sum(a for _, _, a in txns if a > 0)
+        expense = -sum(a for _, _, a in txns if a < 0)
+        closing = opening + income - expense
+        meta = dict(base)
+        meta["period"] = {"start": f"{month}-01", "end": f"{month}-30"}
+        meta["opening"] = opening
+        meta["closing"] = closing
+        opening = closing
+        norm = [
+            {"date": d, "description": desc, "amount": amt, "currency": "SGD",
+             "is_internal_transfer": False, "balance_after": None}
+            for d, desc, amt in txns
+        ]
+        result.append((meta, norm))
+    return result
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+def process_one_file(path: Path, out_dir: Path) -> dict[str, Any]:
+    result = _analyze_file(path)
+    text = render_report(result)
+    out_path = out_dir / (path.stem + "_Finance_Report.md")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    _ = out_path.write_text(text, encoding="utf-8")
+    print(f"Written: {out_path}")
+    np_ = (sum(result["assets"]["cash"].values()) + sum(result["assets"]["time_deposits"].values())
+           + sum(result["assets"]["investments"].values()))
+    print(f"  net_position={fmt(np_)}  currencies={sorted(result['metrics_by_ccy'])}")
+    return result
+
+
+def main(argv: list[str] | None = None) -> int:
+    p = argparse.ArgumentParser(description="Analyse personal balance sheet & cash flow from bank-statement JSON.")
+    _ = p.add_argument("input", nargs="?", help="Input IR JSON file (single statement or consolidated)")
+    _ = p.add_argument("output", nargs="?", help="Output dir (default: alongside input)")
+    _ = p.add_argument("--demo", action="store_true", help="Run with embedded synthetic data")
+    _ = p.add_argument("--dashboard-json", action="store_true",
+                       help="Output dashboard_data.json instead of Markdown")
+    _ = p.add_argument("--categories", help="Path to categories.json from txn-categorize")
+    _ = p.add_argument("--cost-basis", help="Path to cost_basis.json for unrealized P&L (for --dashboard-json)")
+    args = p.parse_args(argv)
+
+    if args.demo:
+        stmts = demo_statements()
+        for meta, txns in stmts:
+            result = {
+                "meta": meta, "metrics_by_ccy": _split_default(txns, meta),
+                "assets": build_assets(meta, _split_default(txns, meta)),
+                "has_txns": bool(txns),
+                "source": f"demo_{meta['period']['start'][:7]}.json",
+            }
+            text = render_report(result)
+            _ = Path(str(result["source"]).replace(".json", "_Finance_Report.md")).write_text(text, encoding="utf-8")
+            print(f"[DEMO] wrote {result['source']} report")
+        return 0
+
+    if not args.input:
+        p.error("provide <input.json> or --demo")
+
+    in_path = Path(args.input)
+    out_dir = Path(args.output) if args.output else in_path.parent
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # Dashboard JSON mode: produce dashboard_data.json from this single IR file.
+    if args.dashboard_json:
+        cat_path = Path(args.categories) if args.categories else None
+        cb_path = Path(args.cost_basis) if args.cost_basis else None
+        dashboard = build_dashboard_json([in_path], cat_path, cb_path)
+        out_path = out_dir / "dashboard_data.json"
+        _ = out_path.write_text(
+            json.dumps(dashboard, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        print(f"Written dashboard data: {out_path}")
+        print(f"  period: {dashboard.get('period', {})}")
+        print(f"  total_sgd_equivalent: {dashboard.get('asset_composition', {}).get('total_sgd_equivalent', {})}")
+        cats_loaded = "yes" if cat_path and cat_path.exists() else "no"
+        cost_loaded = "yes" if cb_path and cb_path.exists() else "no"
+        print(f"  categories: {cats_loaded}  cost_basis: {cost_loaded}")
+        return 0
+
+    # Standard Markdown mode (single file, which may be a consolidated IR).
+    result = _analyze_file(in_path)
+    raw = json.loads(in_path.read_text(encoding="utf-8"))
+    fx_rates = _extract_consolidated_fx(raw)
+    # Fallback: a consolidated IR may not embed FX rates. Fetch the period-end
+    # rate so SGD conversion still works for the consolidated report.
+    if fx_rates is None and result["meta"].get("_consolidated"):
+        period_end = parse_date_to_iso(result["meta"].get("period_end"))
+        if period_end:
+            fx_rates = fetch_fx_rates(period_end)
+    if fx_rates:
+        print(f"FX rates: {fx_rates['date']} from {fx_rates['source']}")
+
+    # Income drill-down: classify every inflow transaction by source keyword.
+    income_drill: list[dict[str, Any]] = []
+    _, ir_rows = _load_ir_with_txn_id(in_path)
+    src_ccy: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
+    src_txns: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in ir_rows:
+        if row.get("is_internal_transfer"):
+            continue
+        if classify_cash_flow(row) != "Income":
+            continue
+        src = _classify_income_source(row["description"])
+        src_ccy[src][row["currency"]] += abs(float(row["amount"]))
+        src_txns[src].append({
+            "date": str(row.get("date", "")),
+            "description": str(row.get("description", "")),
+            "amount": abs(float(row["amount"])),
+            "currency": str(row.get("currency", "")),
+            "bank": str(row.get("bank", "")),
+            "account": str(row.get("account", "")),
+            "account_type": str(row.get("account_type", "")),
+        })
+    for src in sorted(src_ccy, key=lambda s: -sum(src_ccy[s].values())):
+        income_drill.append({
+            "source": src,
+            "by_currency": dict(src_ccy[src]),
+            "transactions": sorted(src_txns[src], key=lambda t: -t["amount"]),
+        })
+
+    # Expense drill-down: classify every outflow by category (from categories.json).
+    expense_drill: list[dict[str, Any]] = []
+    if args.categories:
+        categories_path = Path(args.categories)
+        if categories_path.exists():
+            categories = json.loads(categories_path.read_text(encoding="utf-8"))
+            exp_ccy: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
+            exp_txns: dict[str, list[dict[str, Any]]] = defaultdict(list)
+            for row in ir_rows:
+                if row.get("is_internal_transfer"):
+                    continue
+                if classify_cash_flow(row) != "Expense":
+                    continue
+                txn_id = row.get("txn_id", "")
+                cat = categories.get(txn_id, "Uncategorized")
+                cat_parts = cat.split(": ", 1)
+                cat_disp = cat_parts[1] if len(cat_parts) == 2 else cat
+                exp_ccy[cat_disp][row["currency"]] += float(row["amount"])
+                exp_txns[cat_disp].append({
+                    "date": str(row.get("date", "")),
+                    "description": str(row.get("description", "")),
+                    "amount": abs(float(row["amount"])),
+                    "currency": str(row.get("currency", "")),
+                    "bank": str(row.get("bank", "")),
+                    "account": str(row.get("account", "")),
+                    "account_type": str(row.get("account_type", "")),
+                })
+            for cat in sorted(exp_ccy, key=lambda c: -sum(abs(v) for v in exp_ccy[c].values())):
+                expense_drill.append({
+                    "category": cat,
+                    "by_currency": dict(exp_ccy[cat]),
+                    "transactions": sorted(exp_txns[cat], key=lambda t: -t["amount"]),
+                })
+
+    text = render_report(result, consolidated=result["meta"].get("_consolidated", False),
+                         fx_rates=fx_rates, drilldown=result.get("drilldown"),
+                         income_drilldown=income_drill if income_drill else None,
+                         expense_drilldown=expense_drill if expense_drill else None)
+    out_path = out_dir / (in_path.stem + "_Finance_Report.md")
+    _ = out_path.write_text(text, encoding="utf-8")
+    print(f"Written: {out_path}")
+    return 0
+
+
+def _split_default(txns: list[Txn], meta: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Helper for demo: group default-schema txns by currency and compute metrics."""
+    by_ccy: dict[str, list[Txn]] = defaultdict(list)
+    for t in txns:
+        by_ccy[t["currency"]].append(t)
+    return {ccy: compute_metrics(lst, meta, ccy) for ccy, lst in by_ccy.items()}
+
+
+# ---------------------------------------------------------------------------
+# Dashboard JSON builder — produces dashboard_data.json per the plan at
+# .plan/finance-dashboard-plan.md
+# ---------------------------------------------------------------------------
+
+
+# Income sub-classification keywords (applied to txns already categorized
+# as "Income" by txn-categorize, to split into sources).
+_INCOME_SOURCE_KEYWORDS: list[tuple[str, str]] = [
+    ("SALARY", "Salary"),
+    ("PAYROLL", "Salary"),
+    ("IBG GIRO SALA", "Salary"),
+    ("DIVIDEND", "Dividends"),
+    ("INTEREST", "Interest"),
+    ("INTERESTINT", "Interest"),
+    ("CREDIT INTEREST", "Interest"),
+    ("INTEREST CREDIT", "Interest"),
+    ("INTEREST EARNED", "Interest"),
+    ("CASH REBATE", "Rebates/Cashback"),
+    ("REBATE", "Rebates/Cashback"),
+    ("BONUS", "Bonus"),
+    ("FIXED DEPOSIT", "FD Interest"),
+    ("FDWD", "FD Interest"),
+    ("TIME DEPO", "FD Interest"),
+]
+
+# Discretionary vs non-discretionary classification.
+_DISCRETIONARY_MAP: dict[str, bool] = {
+    "Groceries": False,
+    "Utilities": False,
+    "Transport": False,
+    "Health": False,
+    "Fees": False,
+    "Dining": True,
+    "Shopping": True,
+    "Entertainment": True,
+    "Travel": True,
+    "Personal Care": True,
+}
+
+# Account types that are NOT liquid cash and are instead reported as fixed
+# deposits or investments. Covers both short and long IR `account_type` spellings.
+_NON_CASH_ACCOUNT_TYPES = {
+    "fixed", "time", "fixed_deposit", "time_deposit",
+    "securities", "security", "investment", "srs", "unit_trust",
+}
+# Account types representing fixed-term deposits.
+_FD_ACCOUNT_TYPES = {"fixed", "time", "fixed_deposit", "time_deposit"}
+# Liability accounts — their balances represent debt, not assets.
+_LIABILITY_ACCOUNT_TYPES = {"credit_card"}
+
+
+def _classify_income_source(description: str) -> str:
+    """Map an income transaction description to a source label."""
+    upper = description.upper()
+    for keyword, source in _INCOME_SOURCE_KEYWORDS:
+        if keyword in upper:
+            return source
+    return "Other Income"
+
+
+def _classify_discretionary(category: str) -> bool:
+    """Return True if the category is discretionary spending."""
+    return _DISCRETIONARY_MAP.get(category, True)
+
+
+def _split_cat(cat: str) -> tuple[str, str]:
+    """Split a ``"Class: Subtype"`` category string into ``(cls, sub)``.
+
+    Handles two-level strings from txn-categorize and legacy flat strings
+    for backward compatibility.
+    """
+    parts = cat.split(": ", 1)
+    if len(parts) == 2:
+        return (parts[0], parts[1])
+    return ("", cat)
+
+
+def _build_meta(data: dict[str, Any], path: Path) -> dict[str, Any]:
+    """Extract statement meta from raw IR JSON (shared by both formats).
+
+    When the payload is a consolidated IR (has ``accounts[]``), the account
+    summary, investment holdings and fixed-deposit records are derived from
+    the nested account structures.
+    """
+    sm = data.get("statement_meta", {})
+    extras: dict[str, Any] = dict(data.get("extras", {}))
+    acct_summary_list: list[dict[str, Any]] = []
+    inv_holdings_list: list[dict[str, Any]] = []
+    # Non-consolidated IR carries these at the top level; consolidated IR
+    # derives them from the nested accounts[] instead.
+    if "accounts" not in data:
+        acct_summary_list = list(data.get("account_summary", []) or [])
+        inv_holdings_list = list(data.get("investment_holdings", []) or [])
+    meta: dict[str, Any] = {
+        "bank": sm.get("institution", ""),
+        "account_no": sm.get("account_id", ""),
+        "currency": sm.get("currency", sm.get("functional_currency", "")),
+        "period_start": sm.get("period_from"),
+        "period_end": sm.get("period_to"),
+        "opening": sm.get("opening_balance"),
+        "closing": sm.get("closing_balance"),
+        "account_summary": acct_summary_list,
+        "investment_holdings": inv_holdings_list,
+        "extras": extras,
+        "source_file": data.get("source_file", path.name),
+        "_consolidated": _is_consolidated(data),
+    }
+    if "accounts" in data:
+        time_dep_list: list[dict[str, Any]] = []
+        for acct in data.get("accounts", []):
+            ccy = acct.get("currency", "")
+            atype = str(acct.get("account_type", "")).lower()
+            acct_summary_list.append({
+                "account_no": acct.get("account_no", ""),
+                "currency": ccy,
+                "opening_balance": parse_num(acct.get("opening_balance")),
+                "closing_balance": parse_num(acct.get("closing_balance")),
+                "account_type": atype,
+            })
+            for h in acct.get("investment_holdings", []):
+                inv_holdings_list.append(h)
+            # Unified logic: a time deposit is always priced at the account's own
+            # closing_balance. Every FD account is expected to carry one, so
+            # fd_records is no longer consulted — an FD with no closing_balance is
+            # simply dropped (data-quality) rather than reconstructed.
+            if atype in _FD_ACCOUNT_TYPES:
+                bal = parse_num(acct.get("closing_balance"))
+                if bal is not None:
+                    time_dep_list.append({
+                        "account_no": acct.get("account_no", ""),
+                        "currency": ccy,
+                        "closing_balance": bal,
+                        "deposit_no": acct.get("account_no", ""),
+                    })
+        if time_dep_list:
+            extras["time_deposits"] = time_dep_list
+    return meta
+
+
+def _load_ir_with_txn_id(path: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Load an IR JSON and return (meta, flat_txn_rows_with_txn_id).
+
+    Handles both old (flat ``transactions[]``) and new
+    (nested ``accounts[].transactions[]``) IR formats.
+    Each returned row has: txn_id, date, description, amount, currency,
+    balance_after, bank, account, is_internal_transfer.
+    """
+    data = json.loads(path.read_text(encoding="utf-8"))
+    meta = _build_meta(data, path)
+    rows: list[dict[str, Any]]
+
+    # Detect new format: has top-level "accounts" array
+    if "accounts" in data:
+        rows = []
+        own_digits = _own_account_digits(data.get("accounts", []))
+        for acct in data.get("accounts", []):
+            inst = acct.get("institution", "")
+            acct_no = acct.get("account_no", "")
+            acct_ccy = acct.get("currency", "")
+            acct_type = acct.get("account_type", "")
+            for txn in acct.get("transactions", []):
+                desc = str(txn.get("description", "")).strip()
+                is_internal = bool(txn.get("is_internal_transfer", False)) or _is_self_reference(desc, own_digits)
+                if is_internal:
+                    continue
+                rows.append({
+                    "txn_id": str(txn.get("txn_id", "")),
+                    "date": str(txn.get("posted_date", txn.get("value_date", ""))),
+                    "description": desc,
+                    "amount": float(txn.get("amount", 0.0)),
+                    "currency": str(txn.get("currency", acct_ccy)),
+                    "account_type": acct_type,
+                    "balance_after": parse_num(txn.get("balance_after")),
+                    "bank": inst,
+                    "account": acct_no,
+                    "is_internal_transfer": is_internal,
+                })
+        return meta, rows
+
+    # Old format: flat transactions[]
+    rows = []
+    for txn in data.get("transactions", []):
+        rows.append({
+            "txn_id": str(txn.get("txn_id", "")),
+            "date": str(txn.get("posted_date", txn.get("value_date", ""))),
+            "description": str(txn.get("description", "")).strip(),
+            "amount": float(txn.get("amount", 0.0)),
+            "currency": str(txn.get("currency", "")),
+            "balance_after": parse_num(txn.get("balance_after")),
+            "bank": meta["bank"],
+            "account": meta["account_no"],
+            "is_internal_transfer": bool(txn.get("is_internal_transfer", False)),
+        })
+    return meta, rows
+
+
+def build_dashboard_json(
+    ir_paths: list[Path],
+    categories_path: Path | None = None,
+    cost_basis_path: Path | None = None,
+) -> dict[str, Any]:
+    """Build the ``dashboard_data.json`` structure from IR files + optional inputs.
+
+    Args:
+        ir_paths: One or more IR JSON file paths (multi-period = trends).
+        categories_path: Optional ``categories.json`` from txn-categorize
+            (``{txn_id: category}``).
+        cost_basis_path: Optional ``cost_basis.json`` for unrealized P&L
+            (``{fund_name: {purchase_cost: float, purchase_units: float}}``).
+
+    Returns:
+        The full ``dashboard_data.json`` dict per the finance-dashboard plan.
+    """
+    # ---- Load categories & cost basis ---------------------------------------
+    categories: dict[str, str] = {}
+    if categories_path and categories_path.exists():
+        categories = json.loads(categories_path.read_text(encoding="utf-8"))
+
+    cost_basis: dict[str, dict[str, float]] = {}
+    if cost_basis_path and cost_basis_path.exists():
+        cost_basis = json.loads(cost_basis_path.read_text(encoding="utf-8"))
+
+    # ---- Load all IR files --------------------------------------------------
+    all_results: list[dict[str, Any]] = []
+    all_rows: list[dict[str, Any]] = []
+    for p in ir_paths:
+        meta_raw, ir_rows = _load_ir_with_txn_id(p)
+        # Build the same structure as analyze_file() for reuse
+        result = _analyze_file(p)
+        result["_meta_raw"] = meta_raw
+        result["_rows"] = ir_rows
+        all_results.append(result)
+        all_rows.extend(ir_rows)
+
+    if not all_results:
+        return {"error": "No IR files provided or all empty."}
+
+    # ---- Determine period ---------------------------------------------------
+    periods = []
+    for r in all_results:
+        m = r.get("_meta_raw", r.get("meta", {}))
+        if m.get("period_start") and m.get("period_end"):
+            periods.append({"from": str(m["period_start"]), "to": str(m["period_end"])})
+    latest_period = periods[-1] if periods else {"from": "", "to": ""}
+
+    # ---- FX rates -----------------------------------------------------------
+    fx_rates: dict[str, Any] | None = None
+    fx_data: dict[str, float] = {}
+    # Prefer FX rates embedded in a consolidated IR (bank-ir-consolidate),
+    # which already carry the correct as-of rates. Otherwise fall back to
+    # fetching from the Frankfurter API at the latest statement period-end.
+    for r in all_results:
+        cb = r.get("_meta_raw", r.get("meta", {})).get("extras", {}).get("consolidation", {}).get("fx")
+        if cb:
+            fx_rates = _normalize_consolidated_fx(cb)
+            break
+    if fx_rates is None:
+        iso_dates = [parse_date_to_iso(r.get("_meta_raw", r.get("meta", {})).get("period_end"))
+                     for r in all_results]
+        valid_dates = [d for d in iso_dates if d]
+        if valid_dates:
+            fx_rates = fetch_fx_rates(max(valid_dates))
+    if fx_rates:
+        fx_data = {str(k).upper(): float(v) for k, v in fx_rates["rates"].items()}
+
+    # ---- Asset Composition --------------------------------------------------
+    # Merge assets across all files.
+    merged_cash: dict[str, float] = defaultdict(float)
+    merged_td: dict[str, float] = defaultdict(float)
+    merged_inv: dict[str, float] = defaultdict(float)
+    merged_lia: dict[str, float] = defaultdict(float)
+    for r in all_results:
+        for c, v in r["assets"]["cash"].items():
+            merged_cash[c] += v
+        for c, v in r["assets"]["time_deposits"].items():
+            merged_td[c] += v
+        for c, v in r["assets"]["investments"].items():
+            merged_inv[c] += v
+        for c, v in r["assets"].get("liabilities", {}).items():
+            merged_lia[c] += v
+
+    ccies = sorted(set(list(merged_cash) + list(merged_td) + list(merged_inv) + list(merged_lia)))
+
+    by_currency: dict[str, dict[str, float]] = {}
+    total = {"cash": 0.0, "fixed_deposit": 0.0, "investments": 0.0, "liabilities": 0.0}
+    for ccy in ccies:
+        csh = merged_cash.get(ccy, 0.0)
+        td = merged_td.get(ccy, 0.0)
+        inv = merged_inv.get(ccy, 0.0)
+        lia = merged_lia.get(ccy, 0.0)
+        # Skip currencies where every asset class is effectively zero.
+        if abs(csh + td + inv + lia) < 1e-6:
+            continue
+        by_currency[ccy] = {"cash": csh, "fixed_deposit": td, "investments": inv, "liabilities": lia}
+        sgd_csh = convert_to_sgd(csh, ccy, fx_rates)
+        sgd_td = convert_to_sgd(td, ccy, fx_rates)
+        sgd_inv = convert_to_sgd(inv, ccy, fx_rates)
+        sgd_lia = convert_to_sgd(lia, ccy, fx_rates)
+        # Only sum in SGD equivalent when FX rates are available.
+        if sgd_csh is not None:
+            total["cash"] += sgd_csh
+        if sgd_td is not None:
+            total["fixed_deposit"] += sgd_td
+        if sgd_inv is not None:
+            total["investments"] += sgd_inv
+        if sgd_lia is not None:
+            total["liabilities"] += sgd_lia
+
+    # When FX unavailable and multiple currencies present, the SGD-equivalent
+    # total is meaningless — set to None so the dashboard can show "n/a".
+    if fx_rates is None and len(ccies) > 1:
+        total = None
+    asset_composition = {"by_currency": by_currency, "total_sgd_equivalent": total}
+
+    # ---- Cash Flow (aggregated across all files) -----------------------------
+    cf_income = defaultdict(float)
+    cf_expense = defaultdict(float)
+    cf_tx_in = defaultdict(float)
+    cf_tx_out = defaultdict(float)
+    for r in all_results:
+        for ccy, m in r["metrics_by_ccy"].items():
+            cf_income[ccy] += m["income"]
+            cf_expense[ccy] += m["expense"]
+            cf_tx_in[ccy] += m["transfer_in"]
+            cf_tx_out[ccy] += m["transfer_out"]
+
+    total_income_sgd = 0.0
+    total_expense_sgd = 0.0
+    ccies_for_cf = set(list(cf_income) + list(cf_expense))
+    # Cross-currency sums are only meaningful with FX rates or a single currency.
+    _cf_valid = fx_rates is not None or len(ccies_for_cf) <= 1
+    for ccy in ccies_for_cf:
+        inc = cf_income.get(ccy, 0.0)
+        exp = cf_expense.get(ccy, 0.0)
+        inc_sgd = convert_to_sgd(inc, ccy, fx_rates)
+        exp_sgd = convert_to_sgd(exp, ccy, fx_rates)
+        total_income_sgd += inc_sgd if inc_sgd is not None else inc
+        total_expense_sgd += exp_sgd if exp_sgd is not None else exp
+
+    def _fx_sum(data: dict[str, float]) -> float | None:
+        if not _cf_valid:
+            return None
+        return round(sum(
+            (convert_to_sgd(v, c, fx_rates) or v) for c, v in data.items()), 2)
+
+    cash_flow_summary = {
+        "income_total_sgd": round(total_income_sgd, 2) if _cf_valid else None,
+        "expense_total_sgd": round(total_expense_sgd, 2) if _cf_valid else None,
+        "net_operating_sgd": round(total_income_sgd - total_expense_sgd, 2) if _cf_valid else None,
+        "transfers_in_sgd": _fx_sum(dict(cf_tx_in)),
+        "transfers_out_sgd": _fx_sum(dict(cf_tx_out)),
+    }
+
+    # ---- Income Analysis (using categories.json) -----------------------------
+    income_sources_list: list[dict[str, Any]] = []
+    # Only use the latest period's rows for the period total (not all periods).
+    # For trends we'll use all rows grouped by month.
+    latest_rows = all_results[-1].get("_rows", [])
+    latest_income: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
+    for row in latest_rows:
+        if row.get("is_internal_transfer"):
+            continue
+        cf = classify_cash_flow(row)
+        if cf != "Income":
+            continue
+        txn_id = row.get("txn_id", "")
+        cat = categories.get(txn_id, "")
+        if cat and "Transfer" in cat and "Income" not in cat:
+            continue
+        source = _classify_income_source(row["description"])
+        latest_income[source][row["currency"]] += abs(row["amount"])
+
+    for source in sorted(latest_income):
+        by_ccy = latest_income[source]
+        sgd_total = sum((convert_to_sgd(v, c, fx_rates) or 0.0)
+                        for c, v in by_ccy.items())
+        pct = None
+        if total_income_sgd > 0 and _cf_valid:
+            pct = round(sgd_total / total_income_sgd * 100, 1)
+        income_sources_list.append({
+            "category": "Income",
+            "subcategory": source,
+            "SGD": round(by_ccy.get("SGD", 0.0), 2),
+            "CNY": round(by_ccy.get("CNY", 0.0), 2),
+            "total_sgd": round(sgd_total, 2) if _cf_valid else None,
+            "pct": pct,
+        })
+
+    income_currency_totals: dict[str, float] = {}
+    for source, ccy_map in latest_income.items():
+        for ccy, val in ccy_map.items():
+            income_currency_totals[ccy] = income_currency_totals.get(ccy, 0.0) + round(val, 2)
+
+    # Helper: extract normalized YYYY-MM month from a period-end date string.
+    def _extract_month(meta: dict[str, Any]) -> str:
+        pe = str(meta.get("period_end", ""))
+        iso = parse_date_to_iso(pe)
+        return iso[:7] if iso else pe[:7]
+
+    # Income trend (multi-period)
+    income_trend_months: list[str] = []
+    income_trend_by_source: dict[str, list[float]] = defaultdict(list)
+    for r in all_results:
+        m = r.get("_meta_raw", r.get("meta", {}))
+        month = _extract_month(m)
+        income_trend_months.append(month)
+        period_rows = r.get("_rows", [])
+        period_income: dict[str, float] = defaultdict(float)
+        for row in period_rows:
+            if row.get("is_internal_transfer"):
+                continue
+            cf = classify_cash_flow(row)
+            if cf != "Income":
+                continue
+            txn_id = row.get("txn_id", "")
+            cat = categories.get(txn_id, "")
+            if cat and "Transfer" in cat and "Income" not in cat:
+                continue
+            source = _classify_income_source(row["description"])
+            conv = convert_to_sgd(abs(row["amount"]), row["currency"], fx_rates)
+            period_income[source] += conv if conv is not None else abs(row["amount"])
+        all_sources = set(list(income_trend_by_source) + list(period_income))
+        for s in sorted(all_sources):
+            income_trend_by_source[s].append(round(period_income.get(s, 0.0), 2))
+
+    income_analysis = {
+        "by_source": income_sources_list,
+        "by_currency": income_currency_totals,
+        "trend": {
+            "months": income_trend_months,
+            "by_source": {s: vals for s, vals in income_trend_by_source.items()},
+        },
+    }
+
+    # ---- Spending Analysis (using categories.json) ---------------------------
+    _has_categories = bool(categories)
+    spending_by_cat: dict[str, float] = defaultdict(float)
+    spending_top_merchants: dict[str, tuple[float, str]] = {}  # merchant → (amount, category)
+    for row in latest_rows:
+        if row.get("is_internal_transfer"):
+            continue
+        cf = classify_cash_flow(row)
+        if cf != "Expense":
+            continue
+        txn_id = row.get("txn_id", "")
+        cat = categories.get(txn_id, "")
+        if not cat:
+            # Fallback when no categories: use cash-flow classification
+            cat = "Expense" if not _has_categories else "Uncategorized"
+        if "Transfer" in cat or cat.startswith("Income:") or cat == "Income":
+            continue
+        amt = abs(row["amount"])  # make positive for display
+
+        # Split two-level category into class + subtype for display grouping
+        _cls_name, sub_name = _split_cat(cat)
+        display_cat = sub_name if sub_name else cat
+
+        spending_by_cat[display_cat] += amt
+        merchant = row["description"]
+        # Update top merchant
+        existing = spending_top_merchants.get(merchant, (0.0, display_cat))
+        spending_top_merchants[merchant] = (existing[0] + amt, display_cat)
+
+    total_spending = sum(spending_by_cat.values())
+    disc_sgd = sum(v for c, v in spending_by_cat.items() if _classify_discretionary(c))
+    nondisc_sgd = total_spending - disc_sgd
+
+    spending_categories_list: list[dict[str, Any]] = []
+    for cat in sorted(spending_by_cat, key=lambda c: spending_by_cat[c], reverse=True):
+        amt = spending_by_cat[cat]
+        spending_categories_list.append({
+            "category": "Expense",
+            "subcategory": cat,
+            "amount_sgd": round(amt, 2),
+            "pct": round(amt / total_spending * 100, 1) if total_spending > 0 else 0.0,
+            "discretionary": _classify_discretionary(cat),
+        })
+
+    # Top merchants (top 10 by amount)
+    sorted_merchants = sorted(spending_top_merchants.items(),
+                              key=lambda x: x[1][0], reverse=True)[:10]
+    top_merchants_list: list[dict[str, Any]] = []
+    for merchant, (amt, cat) in sorted_merchants:
+        top_merchants_list.append({
+            "merchant": merchant,
+            "category": cat,
+            "amount_sgd": round(amt, 2),
+        })
+
+    # Spending trend (multi-period)
+    spend_trend_months: list[str] = []
+    spend_trend_by_cat: dict[str, list[float]] = defaultdict(list)
+    for r in all_results:
+        m = r.get("_meta_raw", r.get("meta", {}))
+        month = _extract_month(m)
+        spend_trend_months.append(month)
+        period_rows = r.get("_rows", [])
+        period_spend: dict[str, float] = defaultdict(float)
+        for row in period_rows:
+            if row.get("is_internal_transfer"):
+                continue
+            cf = classify_cash_flow(row)
+            if cf != "Expense":
+                continue
+            txn_id = row.get("txn_id", "")
+            cat = categories.get(txn_id, "")
+            if not cat:
+                cat = "Expense" if not _has_categories else "Uncategorized"
+            if "Transfer" in cat or cat.startswith("Income:") or cat == "Income":
+                continue
+            # Use subtype as the trend key
+            _, sub_name = _split_cat(cat)
+            trend_cat = sub_name if sub_name else cat
+            conv = convert_to_sgd(abs(row["amount"]), row["currency"], fx_rates)
+            period_spend[trend_cat] += conv if conv is not None else abs(row["amount"])
+        all_spend_cats = set(list(spend_trend_by_cat) + list(period_spend))
+        for s in sorted(all_spend_cats):
+            spend_trend_by_cat[s].append(round(period_spend.get(s, 0.0), 2))
+
+    spending_analysis = {
+        "by_category": spending_categories_list,
+        "discretionary_split": {
+            "discretionary_sgd": round(disc_sgd, 2),
+            "non_discretionary_sgd": round(nondisc_sgd, 2),
+            "discretionary_pct": round(disc_sgd / total_spending * 100, 1) if total_spending > 0 else 0.0,
+            "non_discretionary_pct": round(nondisc_sgd / total_spending * 100, 1) if total_spending > 0 else 0.0,
+        },
+        "top_merchants": top_merchants_list,
+        "trend": {
+            "months": spend_trend_months,
+            "by_category": {s: vals for s, vals in spend_trend_by_cat.items()},
+        },
+    }
+
+    # ---- Account Value Change ------------------------------------------------
+    current_accounts: list[dict[str, Any]] = []
+    fixed_deposits: list[dict[str, Any]] = []
+    # Use the first and last file for opening/closing comparison when available.
+    for r in all_results:
+        meta_r = r.get("_meta_raw", r.get("meta", {}))
+        acct_summary = meta_r.get("account_summary", [])
+        _NON_CASH = _NON_CASH_ACCOUNT_TYPES
+        for acct in acct_summary:
+            acct_type = str(acct.get("account_type", "")).lower()
+            if acct_type in _NON_CASH:
+                continue
+            ccy = acct.get("currency", "")
+            opening = parse_num(acct.get("opening_balance"))
+            closing = acct.get("closing_balance") or 0.0  # already parsed in _build_meta
+            delta = (closing - opening) if opening is not None else None
+            current_accounts.append({
+                "name": str(acct.get("account_no", "")),
+                "currency": ccy,
+                "opening": opening,
+                "closing": closing,
+                "delta": delta,
+            })
+        # Fixed deposits come from the consolidated time_deposits records.
+        for td in meta_r.get("extras", {}).get("time_deposits", []):
+            b = td.get("closing_balance")  # already parsed in _build_meta
+            if b is None:
+                principal = parse_num(td.get("principal")) or 0.0
+                interest = parse_num(td.get("interest_amount")) or 0.0
+                b = principal + interest
+            # Look up the matching opening balance from account_summary.
+            td_open: float | None = None
+            for acct in acct_summary:
+                if str(acct.get("account_no", "")) == str(td.get("account_no", td.get("deposit_no", ""))):
+                    td_open = parse_num(acct.get("opening_balance"))
+                    break
+            td_delta = (b - td_open) if td_open is not None else None
+            fixed_deposits.append({
+                "name": str(td.get("account_no", td.get("deposit_no", ""))),
+                "currency": td.get("currency", "SGD"),
+                "opening": td_open,
+                "closing": b or 0.0,
+                "delta": td_delta,
+            })
+
+    account_value_change = {
+        "current_accounts": current_accounts,
+        "fixed_deposits": fixed_deposits,
+    }
+
+    # ---- Investment Detail ---------------------------------------------------
+    investment_detail: list[dict[str, Any]] = []
+    for r in all_results:
+        meta_r = r.get("_meta_raw", r.get("meta", {}))
+        for h in meta_r.get("investment_holdings", []):
+            name = str(h.get("name", h.get("fund_name", "")))
+            ccy = str(h.get("currency", ""))
+            units = parse_num(h.get("units", h.get("holdings"))) or 0.0
+            price = parse_num(h.get("price", h.get("nav_per_unit"))) or 0.0
+            valuation = parse_num(h.get("valuation", h.get("market_value"))) or (units * price)
+            cb = cost_basis.get(name, {})
+            cb_total = float(cb.get("purchase_cost", 0.0) or 0.0)
+            if cb_total <= 0:
+                cb_total = parse_num(h.get("cost")) or 0.0  # consolidated embedded cost
+            pnl = parse_num(h.get("unrealised_pl"))
+            if pnl is None and cb_total > 0:
+                pnl = valuation - cb_total
+            pnl_pct = (pnl / cb_total * 100) if pnl is not None and cb_total > 0 else None
+            investment_detail.append({
+                "name": name,
+                "currency": ccy,
+                "units": round(units, 4),
+                "price": round(price, 4),
+                "valuation": round(valuation, 2),
+                "cost_basis": round(cb_total, 2) if cb_total > 0 else None,
+                "unrealized_pnl": round(pnl, 2) if pnl is not None else None,
+                "pnl_pct": round(pnl_pct, 2) if pnl_pct is not None else None,
+            })
+        for ut in meta_r.get("extras", {}).get("unit_trusts", []):
+            name = str(ut.get("name", ""))
+            ccy = str(ut.get("currency", "SGD"))
+            units = parse_num(ut.get("units")) or 0.0
+            valuation = parse_num(ut.get("market_value")) or 0.0
+            cb = cost_basis.get(name, {})
+            cb_total = cb.get("purchase_cost", 0.0)
+            pnl = valuation - cb_total if cb_total > 0 else None
+            pnl_pct = (pnl / cb_total * 100) if pnl is not None and cb_total > 0 else None
+            investment_detail.append({
+                "name": name,
+                "currency": ccy,
+                "units": round(units, 4),
+                "price": None,
+                "valuation": round(valuation, 2),
+                "cost_basis": round(cb_total, 2) if cb_total > 0 else None,
+                "unrealized_pnl": round(pnl, 2) if pnl is not None else None,
+                "pnl_pct": round(pnl_pct, 2) if pnl_pct is not None else None,
+            })
+
+    # ---- Trends (multi-period) -----------------------------------------------
+    trend_months: list[str] = []
+    trend_net_worth: list[float | None] = []
+    trend_cf_net: list[float | None] = []
+    trend_income: list[float | None] = []
+    trend_expense: list[float | None] = []
+    for r in all_results:
+        m = r.get("_meta_raw", r.get("meta", {}))
+        month = _extract_month(m)
+        trend_months.append(month)
+        np_val = 0.0
+        for c, v in r["assets"]["cash"].items():
+            conv = convert_to_sgd(v, c, fx_rates)
+            np_val += conv if conv is not None else v
+        for c, v in r["assets"]["time_deposits"].items():
+            conv = convert_to_sgd(v, c, fx_rates)
+            np_val += conv if conv is not None else v
+        for c, v in r["assets"]["investments"].items():
+            conv = convert_to_sgd(v, c, fx_rates)
+            np_val += conv if conv is not None else v
+        for c, v in r["assets"].get("liabilities", {}).items():
+            conv = convert_to_sgd(v, c, fx_rates)
+            np_val -= conv if conv is not None else v
+        trend_net_worth.append(round(np_val, 2) if _cf_valid else None)
+        # Net cash flow (SGD equivalent)
+        cf_net = 0.0
+        inc = 0.0
+        exp = 0.0
+        for ccy, m_val in r["metrics_by_ccy"].items():
+            conv_cf = convert_to_sgd(m_val["net_change_cash"], ccy, fx_rates)
+            conv_inc = convert_to_sgd(m_val["income"], ccy, fx_rates)
+            conv_exp = convert_to_sgd(m_val["expense"], ccy, fx_rates)
+            cf_net += conv_cf if conv_cf is not None else m_val["net_change_cash"]
+            inc += conv_inc if conv_inc is not None else m_val["income"]
+            exp += conv_exp if conv_exp is not None else m_val["expense"]
+        trend_cf_net.append(round(cf_net, 2) if _cf_valid else None)
+        trend_income.append(round(inc, 2) if _cf_valid else None)
+        trend_expense.append(round(exp, 2) if _cf_valid else None)
+
+    trends = {
+        "months": trend_months,
+        "net_worth_sgd": trend_net_worth,
+        "cash_flow_net_sgd": trend_cf_net,
+        "income_total_sgd": trend_income,
+        "expense_total_sgd": trend_expense,
+    }
+
+    # ---- Assemble ------------------------------------------------------------
+    return {
+        "period": latest_period,
+        "base_currency": "SGD",
+        "fx_rates": fx_data,
+        "asset_composition": asset_composition,
+        "cash_flow": {"summary": cash_flow_summary},
+        "income_analysis": income_analysis,
+        "spending_analysis": spending_analysis,
+        "account_value_change": account_value_change,
+        "investment_detail": investment_detail,
+        "trends": trends,
+    }
+
+
+if __name__ == "__main__":
+    sys.exit(main())

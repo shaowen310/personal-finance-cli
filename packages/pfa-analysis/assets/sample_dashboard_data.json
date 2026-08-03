@@ -1,0 +1,206 @@
+{
+  "period": {
+    "from": "2025-01-01",
+    "to": "2025-06-30"
+  },
+  "base_currency": "SGD",
+  "fx_rates": {
+    "SGD": 1.0,
+    "CNY": 5.25,
+    "JPY": 110.0,
+    "USD": 0.75
+  },
+  "asset_composition": {
+    "by_currency": {
+      "SGD": {
+        "cash": 200000,
+        "fixed_deposit": 150000,
+        "investments": 170000,
+        "liabilities": 5000
+      },
+      "USD": {
+        "cash": 10000,
+        "fixed_deposit": 0,
+        "investments": 50000,
+        "liabilities": 0
+      }
+    },
+    "total_sgd_equivalent": {
+      "cash": 213333,
+      "fixed_deposit": 150000,
+      "investments": 236667,
+      "liabilities": 5000
+    }
+  },
+  "cash_flow": {
+    "summary": {
+      "income_total_sgd": 15000,
+      "expense_total_sgd": 10000,
+      "net_operating_sgd": 5000,
+      "transfers_in_sgd": 20000,
+      "transfers_out_sgd": 18000
+    }
+  },
+  "income_analysis": {
+    "by_source": [
+      { "category": "Income", "subcategory": "Salary", "total_sgd": 14000, "pct": 93.3 },
+      { "category": "Income", "subcategory": "Bonus", "total_sgd": 1000, "pct": 6.7 }
+    ],
+    "by_currency": [
+      { "currency": "SGD", "amount": 15000, "pct": 100.0 }
+    ],
+    "trend": {
+      "months": ["2025-01", "2025-02", "2025-03", "2025-04", "2025-05", "2025-06"],
+      "by_source": {
+        "Salary": [14000, 14000, 14000, 14000, 14000, 14000],
+        "Bonus": [0, 0, 0, 0, 1000, 0]
+      }
+    }
+  },
+  "spending_analysis": {
+    "by_category": [
+      { "category": "Expense", "subcategory": "Dining", "amount_sgd": 2000, "pct": 20.0, "discretionary": true },
+      { "category": "Expense", "subcategory": "Shopping", "amount_sgd": 1500, "pct": 15.0, "discretionary": true },
+      { "category": "Expense", "subcategory": "Groceries", "amount_sgd": 3000, "pct": 30.0, "discretionary": false },
+      { "category": "Expense", "subcategory": "Transport", "amount_sgd": 800, "pct": 8.0, "discretionary": false },
+      { "category": "Expense", "subcategory": "Utilities", "amount_sgd": 1200, "pct": 12.0, "discretionary": false },
+      { "category": "Expense", "subcategory": "Other", "amount_sgd": 1500, "pct": 15.0, "discretionary": true }
+    ],
+    "discretionary_split": {
+      "discretionary_sgd": 4300,
+      "discretionary_pct": 43.0,
+      "non_discretionary_sgd": 5700,
+      "non_discretionary_pct": 57.0
+    },
+    "top_merchants": [
+      { "merchant": "Sample Supermarket", "category": "Groceries", "amount_sgd": 1200 },
+      { "merchant": "Sample Restaurant", "category": "Dining", "amount_sgd": 800 },
+      { "merchant": "Sample Power Co", "category": "Utilities", "amount_sgd": 600 },
+      { "merchant": "Sample Clothing Store", "category": "Shopping", "amount_sgd": 500 },
+      { "merchant": "Sample Ride Share", "category": "Transport", "amount_sgd": 400 }
+    ],
+    "trend": {
+      "months": ["2025-01", "2025-02", "2025-03", "2025-04", "2025-05", "2025-06"],
+      "by_category": {
+        "Dining": [1800, 2000, 1900, 2100, 2200, 2000],
+        "Groceries": [2800, 3000, 2900, 3100, 3200, 3000],
+        "Shopping": [1200, 1500, 1300, 1600, 1400, 1500],
+        "Transport": [700, 800, 750, 850, 900, 800],
+        "Utilities": [1100, 1200, 1150, 1250, 1300, 1200],
+        "Other": [1400, 1500, 1450, 1550, 1600, 1500]
+      }
+    }
+  },
+  "account_value_change": {
+    "current_accounts": [
+      {
+        "name": "Sample Savings",
+        "currency": "SGD",
+        "opening": 50000,
+        "closing": 55000,
+        "delta": 5000
+      },
+      {
+        "name": "Sample Checking",
+        "currency": "SGD",
+        "opening": 10000,
+        "closing": 9000,
+        "delta": -1000
+      },
+      {
+        "name": "Sample USD Account",
+        "currency": "USD",
+        "opening": 5000,
+        "closing": 6000,
+        "delta": 1000
+      },
+      {
+        "name": "Sample Credit Card",
+        "currency": "SGD",
+        "opening": 2000,
+        "closing": 5000,
+        "delta": 3000
+      }
+    ],
+    "fixed_deposits": [
+      {
+        "name": "Sample FD 12M",
+        "currency": "SGD",
+        "opening": 50000,
+        "closing": 50000,
+        "delta": 0
+      },
+      {
+        "name": "Sample FD 6M",
+        "currency": "CNY",
+        "opening": 50000,
+        "closing": 50000,
+        "delta": 0
+      }
+    ]
+  },
+  "investment_detail": [
+    {
+      "name": "Sample Bond Fund",
+      "currency": "SGD",
+      "units": 1000,
+      "price": 1.05,
+      "valuation": 1050,
+      "cost_basis": 1000,
+      "unrealized_pnl": 50,
+      "pnl_pct": 5.0
+    },
+    {
+      "name": "Sample Equity Fund",
+      "currency": "SGD",
+      "units": 5000,
+      "price": 2.10,
+      "valuation": 10500,
+      "cost_basis": 10000,
+      "unrealized_pnl": 500,
+      "pnl_pct": 5.0
+    }
+  ],
+  "trends": {
+    "months": [
+      "2025-01",
+      "2025-02",
+      "2025-03",
+      "2025-04",
+      "2025-05",
+      "2025-06"
+    ],
+    "net_worth_sgd": [
+      580000,
+      585000,
+      590000,
+      592000,
+      595000,
+      600000
+    ],
+    "cash_flow_net_sgd": [
+      4000,
+      4500,
+      5000,
+      4800,
+      5200,
+      5000
+    ],
+    "income_total_sgd": [
+      15000,
+      15000,
+      15000,
+      15000,
+      16000,
+      15000
+    ],
+    "expense_total_sgd": [
+      11000,
+      10500,
+      10000,
+      10200,
+      10800,
+      10000
+    ]
+  }
+}

@@ -1,0 +1,286 @@
+# txn-categorize — categorization rules
+#
+# Edit this file (not the Python) to extend or retune categorization.
+# Rules are evaluated in order; the first matching rule wins.
+# Matching is case- and punctuation-insensitive.
+# Keywords are matched as substrings against the transaction description.
+#
+# ORDERING IS CRITICAL:
+#   Specific merchant/brand rules MUST come before generic patterns
+#   (e.g. "SWEE HENG" before "Funds Transfer") to prevent mis-classification.
+#
+# TWO-LEVEL SCHEME:
+#   Categories use "Class: Subtype" format. Classes:
+#   - Income   (Salary, Bonus, Interest, Dividends, Investment, Other)
+#   - Expense  (Groceries, Dining, Transport, Utilities, Shopping, Travel,
+#               Entertainment, Health, Personal Care, Other)
+#   - Transfer (Internal, External)
+
+categories:
+  - "Income: Salary"
+  - "Income: Bonus"
+  - "Income: Interest"
+  - "Income: Dividends"
+  - "Income: Investment"
+  - "Income: Other"
+  - "Expense: Groceries"
+  - "Expense: Dining"
+  - "Expense: Transport"
+  - "Expense: Utilities"
+  - "Expense: Shopping"
+  - "Expense: Travel"
+  - "Expense: Entertainment"
+  - "Expense: Health"
+  - "Expense: Personal Care"
+  - "Expense: CW"
+  - "Expense: Tax"
+  - "Expense: Productivity"
+  - "Expense: Other"
+  - "Other: Other"
+  - "Transfer: Internal"
+  - "Transfer: External"
+
+default_category: "Other: Other"
+
+rules:
+  # =========================================================================
+  # 1. Income — classified by source (Bonus before Salary to avoid overlap)
+  # =========================================================================
+  - category: "Income: Bonus"
+    match:
+      - BONUS
+
+  - category: "Income: Dividends"
+    match:
+      - DIVIDEND
+
+  - category: "Income: Interest"
+    match:
+      - CREDIT INTEREST
+      - INTEREST CREDIT
+      - INTEREST EARNED
+      - INTERESTINT
+      - SYNTHETIC
+      - FIXED DEPOSIT
+      - FDWD
+      - TIME DEPO AUTO ROLLOVER
+
+  - category: "Income: Salary"
+    match:
+      - SALARY
+      - PAYROLL
+      - IBG GIRO SALA
+
+  - category: "Income: Other"
+    match:
+      - CASH REBATE
+      - INWARD CREDIT
+
+  # =========================================================================
+  # 2. Groceries — supermarkets, specialty grocers, convenience
+  # =========================================================================
+  - category: "Expense: Groceries"
+    match:
+      - NTUC
+      - FAIRPRICE
+      - COLD STORAGE
+      - DON DON DONKI
+      - SCARLETT
+      - 7-ELEVEN
+      - GUSTO
+      - SHENG SIONG
+      - GIANT
+      - 99 OLD TREES DURIAN
+      - FRESH FRUITS
+
+  # =========================================================================
+  # 3. Dining — restaurants, cafes, food courts, bakeries, delivery
+  #    (must come BEFORE generic Transfer so PAYNOW to eateries is caught)
+  # =========================================================================
+  - category: "Expense: Dining"
+    match:
+      # Fast food
+      - MCDONALD
+      - KFC
+      - BURGER KING
+      - SUBWAY
+      - LONG JOHN SILVER
+      - MOS BURGER
+      # Japanese / Asian chains
+      - SUKIYA
+      - WOK HEY
+      - GUZMAN
+      - MODUAMY
+      # Cafes & bubble tea
+      - STARBUCKS
+      - KOI
+      - MIXUE
+      - COMPOSE COFFEE
+      - NYLON COFFEE
+      - THE DAILY CUT
+      # Food courts / hawker
+      - HAWKER
+      - KOPITIAM
+      - KOUFU
+      - FR JWL
+      # Bakeries
+      - SWEE HENG
+      # Chicken / soup / speciality
+      - OMMA CHICKEN
+      - CHICKEN SOUP
+      # Food delivery
+      - FOODPANDA
+      - GRABFOOD
+      - DELIVEROO
+      - ORDER9720
+
+  # =========================================================================
+  # 4. Shopping — retail, online marketplaces, apparel, electronics
+  # =========================================================================
+  - category: "Expense: Shopping"
+    match:
+      # Online marketplaces
+      - SHOPEE
+      - LAZADA
+      - AMAZON
+      - SHOPBACK
+      # Electronics
+      - HARVEY NORMAN
+      - COURTS
+      - BEST DENKI
+      - HONOR
+      - APPLE
+      # Apparel / accessories
+      - HUSH PUPPIES
+      - NATURALPROJECT
+
+  # =========================================================================
+  # 5. Travel — flights, hotels, OTAs, travel activities
+  # =========================================================================
+  - category: "Expense: Travel"
+    match:
+      - KLOOK
+      - TRIP.COM
+      - AGODA
+      - BOOKING.COM
+      - AIRASIA
+      - SCOOT
+      - HOTEL
+
+  # =========================================================================
+  # 6. Entertainment — gaming, streaming, subscriptions, digital content
+  # =========================================================================
+  - category: "Expense: Entertainment"
+    match:
+      - GOOGLE YOUTUBE
+      - YOUTUBE PREMIUM
+      - STEAMGAMES
+      - STEAM PURCHASE
+      - GOOGLE GYM
+      - GOOGLE ONE
+      - NETFLIX
+      - SPOTIFY
+      - DISNEY
+
+  # =========================================================================
+  # 7. Personal Care — laundry, haircut, beauty services
+  # =========================================================================
+  - category: "Expense: Personal Care"
+    match:
+      - EZ WASH
+      - LAUNDRY
+      - KCUTS
+      - SEPHORA
+
+  # =========================================================================
+  # 8. Health — pharmacies, clinics, hospitals
+  # =========================================================================
+  - category: "Expense: Health"
+    match:
+      - GUARDIAN
+      - WATSONS
+      - UNITY
+      - DOCTOR
+      - CLINIC
+      - PHARMACY
+      - HOSPITAL
+      - DENTAL
+
+  # =========================================================================
+  # 8b. Productivity — AI/ML services and subscriptions
+  # =========================================================================
+  - category: "Expense: Productivity"
+    match:
+      - CAKEGROWTH
+      - GOOGLE CLOUD
+      - CENTAURI
+
+  # =========================================================================
+  # 9. Other — bank charges, misc debits, FX conversion fees
+  # =========================================================================
+  - category: "Expense: Other"
+    match:
+      - SERVICE CHARGE
+      - ANNUAL FEE
+      - LATE FEE
+      - ADMIN FEE
+      - MONTHLY FEE
+      - CCY CONVERSION FEE
+      - MISC DEBIT
+      - MISC DR
+
+  # =========================================================================
+  # 9a. Tax — IRAS income tax, GIRO tax deductions
+  # =========================================================================
+  - category: "Expense: Tax"
+    match:
+      - INWARD DR - GIRO TAX
+      - IRAS
+
+  # =========================================================================
+  # 9b. Cash Withdrawal — ATM / over-the-counter cash withdrawals
+  # =========================================================================
+  - category: "Expense: CW"
+    match:
+      - CASH WITHDRAWAL
+
+  # =========================================================================
+  # 10. Transfer — Internal transfers are detected via IR is_internal_transfer
+  #     (pre-classified before rules).  External transfers are auto-detected
+  #     by the script AND keyword-matched here.
+  #     MUST come AFTER merchant rules so "PAYNOW to SWEE HENG" is caught by
+  #     Dining, not Transfer.
+  # =========================================================================
+  - category: "Transfer: External"
+    match:
+      - E-BANKING TRANSFER
+      - STANDING INSTRUCTION
+      - FUNDS TRANSFER
+      - FAST PAYMENT
+      - PAYNOW-FAST
+      - PAYNOW TRANSFER
+      - CURRENCY CONVERSION
+      - TOP-UP TO PAYLAH
+
+  # =========================================================================
+  # 11. Transport — public transit, ride-hailing, taxis
+  # =========================================================================
+  - category: "Expense: Transport"
+    match:
+      - BUS/MRT
+      - TRANSIT
+      - TAXI
+      - COMFORT
+      - GOJEK
+
+  # =========================================================================
+  # 12. Utilities — electricity, water, telco, town council
+  # =========================================================================
+  - category: "Expense: Utilities"
+    match:
+      - SP SERVICES
+      - TOWN COUNCIL
+      - PUB
+      - SINGTEL
+      - STARHUB
+      - M1

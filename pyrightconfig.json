@@ -6,4 +6,6 @@
   "reportUnknownVariableType": "none",
   "reportUnknownArgumentType": "none",
   "reportUnknownMemberType": "none",
+  "reportMissingImports": "none",
+  "reportMissingTypeStubs": "none"
 }

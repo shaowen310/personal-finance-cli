@@ -1,0 +1,727 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Personal Finance Dashboard</title>
+<style>
+  :root {
+    --bg: #f5f7fa;
+    --card: #ffffff;
+    --ink: #1f2733;
+    --muted: #6b7785;
+    --line: #e6eaf0;
+    --accent: #2f6df6;
+    --good: #1f9d6b;
+    --bad: #d9534f;
+    --shadow: 0 1px 3px rgba(20,30,50,.08), 0 6px 18px rgba(20,30,50,.06);
+    --radius: 14px;
+    --c1: #2f6df6; --c2: #1f9d6b; --c3: #f5a623; --c4: #9b59d0;
+    --c5: #e9573f; --c6: #16b5c4; --c7: #ef6fb0; --c8: #7c8aa0;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 28px 20px 60px; }
+  header.top { display: flex; flex-wrap: wrap; align-items: baseline; gap: 12px; margin-bottom: 6px; }
+  header.top h1 { font-size: 22px; margin: 0; letter-spacing: .2px; }
+  header.top .range { color: var(--muted); font-size: 13px; }
+  .sub { color: var(--muted); margin: 0 0 22px; font-size: 13px; }
+  .cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 22px; }
+  @media (max-width: 940px){ .cards { grid-template-columns: repeat(2,1fr); } }
+  @media (max-width: 520px){ .cards { grid-template-columns: 1fr; } }
+  .card {
+    background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 16px 18px; box-shadow: var(--shadow);
+  }
+  .card .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .5px; }
+  .card .value { font-size: 22px; font-weight: 650; margin-top: 6px; }
+  .card .delta { font-size: 12px; margin-top: 4px; color: var(--muted); }
+  .delta.pos { color: var(--good); } .delta.neg { color: var(--bad); }
+  .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 18px; }
+  @media (max-width: 860px){ .grid { grid-template-columns: 1fr; } }
+  .panel {
+    background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 18px; box-shadow: var(--shadow); min-width: 0;
+  }
+  .panel h2 { font-size: 15px; margin: 0 0 2px; }
+  .panel .hint { color: var(--muted); font-size: 12px; margin: 0 0 12px; }
+  .panel.full { grid-column: 1 / -1; }
+  .toolbar { display: flex; gap: 8px; align-items: center; margin: 0 0 12px; flex-wrap: wrap; }
+  .toggle { display: inline-flex; border: 1px solid var(--line); border-radius: 999px; overflow: hidden; }
+  .toggle button { border: 0; background: transparent; padding: 6px 14px; font-size: 12px; cursor: pointer; color: var(--muted); }
+  .toggle button.active { background: var(--accent); color: #fff; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: right; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; }
+  tbody tr:hover { background: #fafbfd; }
+  .pos { color: var(--good); } .neg { color: var(--bad); } .na { color: var(--muted); }
+  .legend { display: flex; flex-wrap: wrap; gap: 10px 16px; margin-top: 10px; font-size: 12px; color: var(--muted); }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .dot { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+  .chart { width: 100%; }
+  .split { display: grid; grid-template-columns: 220px 1fr; gap: 18px; align-items: center; }
+  @media (max-width: 560px){ .split { grid-template-columns: 1fr; } }
+  .merchants { list-style: none; margin: 0; padding: 0; }
+  .merchants li { display: flex; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 13px; gap: 8px; }
+  .merchants li:last-child { border-bottom: 0; }
+  .merchants .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .merchants .amount { white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .cat-tag { display: inline-block; font-size: 10.5px; padding: 2px 8px; border-radius: 999px; white-space: nowrap; font-weight: 600; }
+  .cat-tag-dining { background: #fef2f2; color: #dc2626; }
+  .cat-tag-travel { background: #fefce8; color: #ca8a04; }
+  .cat-tag-shopping { background: #fff7ed; color: #ea580c; }
+  .cat-tag-transport { background: #f0fdf4; color: #16a34a; }
+  .cat-tag-groceries { background: #eff6ff; color: #2563eb; }
+  .cat-tag-utilities { background: #f5f3ff; color: #7c3aed; }
+  .cat-tag-fees { background: #f9fafb; color: #6b7280; }
+  .cat-tag-healthcare { background: #fdf2f8; color: #db2777; }
+  .cat-tag-insurance { background: #f0fdfa; color: #0d9488; }
+  .cat-tag-entertainment { background: #fefce8; color: #d97706; }
+  .cat-tag-subscriptions { background: #f5f3ff; color: #7c3aed; }
+  .cat-tag-education { background: #ecfeff; color: #0891b2; }
+  .cat-tag-default { background: #f3f4f6; color: #6b7280; }
+  .empty { color: var(--muted); font-size: 13px; padding: 12px 0; }
+  #loader { background: var(--card); border: 1px dashed var(--line); border-radius: var(--radius); padding: 28px; text-align: center; color: var(--muted); }
+  #loader input { margin-top: 12px; }
+  .pill { display:inline-block; font-size:11px; padding:2px 8px; border-radius:999px; background:#eef2f8; color:var(--muted); }
+  footer { color: var(--muted); font-size: 12px; margin-top: 28px; text-align: center; }
+  a { color: var(--accent); }
+  .clickable { cursor: pointer; }
+  .flash-highlight { box-shadow: 0 0 0 3px var(--accent), var(--shadow); transition: box-shadow 0.3s; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <h1>Personal Finance Dashboard</h1>
+    <span class="range" id="range"></span>
+  </header>
+  <p class="sub" id="subtitle">Loading…</p>
+
+  <div id="loader">
+    <div>Loading <code>dashboard_data.json</code>…</div>
+    <div id="loader-fallback" style="display:none">
+      <p>Couldn't auto-load the data file (browsers block <code>fetch</code> on local files).
+         Select <code>dashboard_data.json</code> to view the dashboard:</p>
+      <input type="file" id="file" accept=".json" />
+    </div>
+  </div>
+
+  <div id="app" style="display:none">
+    <div class="cards" id="cards"></div>
+
+    <div class="grid">
+      <section class="panel" id="networth-panel">
+        <h2>Net Worth</h2>
+        <p class="hint">Month-over-month net worth (SGD equivalent).</p>
+        <div class="toolbar">
+          <div class="toggle" id="nw-toggle">
+            <button data-mode="trend" class="active">Net Worth (SGD)</button>
+            <button data-mode="bycur">By Currency</button>
+          </div>
+        </div>
+        <div id="networth-chart"></div>
+      </section>
+
+      <section class="panel" id="cashflow-panel">
+        <h2>Cash Flow</h2>
+        <p class="hint">Income, expense and net cash flow per month (SGD equivalent).</p>
+        <div id="cashflow-chart"></div>
+      </section>
+
+      <section class="panel full" id="assets-panel">
+        <h2>Balance Sheet</h2>
+        <p class="hint">SGD-equivalent breakdown by asset class, with a by-currency table.</p>
+        <div class="split">
+          <div id="asset-donut"></div>
+          <div id="asset-table"></div>
+        </div>
+      </section>
+
+      <section class="panel" id="income-panel">
+        <h2>Income Analysis</h2>
+        <p class="hint">Income trend by source, month-over-month.</p>
+        <div id="income-trend"></div>
+      </section>
+
+      <section class="panel" id="top-income-panel">
+        <h2>Income Composition</h2>
+        <p class="hint">Income by source and % of total.</p>
+        <div id="income-table"></div>
+      </section>
+
+      <section class="panel" id="spending-panel">
+        <h2>Spending Analysis</h2>
+        <p class="hint">Spending by category and discretionary vs non-discretionary.</p>
+        <div class="split">
+          <div id="spend-donut"></div>
+          <div id="spend-split"></div>
+        </div>
+        <div id="spend-chart" style="margin-top:10px"></div>
+      </section>
+
+      <section class="panel" id="merchants-panel">
+        <h2>Top Merchants</h2>
+        <p class="hint">Largest single-merchant spend in the latest period.</p>
+        <ul class="merchants" id="merchants"></ul>
+      </section>
+
+      <section class="panel full" id="accounts-panel">
+        <h2>Account Value Change</h2>
+        <p class="hint">Closing balances per account (delta shown when an opening balance is available).</p>
+        <div id="accounts-table"></div>
+      </section>
+
+      <section class="panel full" id="invest-panel">
+        <h2>Investment Detail</h2>
+        <p class="hint">Holdings with cost basis and unrealized P&amp;L.</p>
+        <div id="invest-table"></div>
+      </section>
+    </div>
+  </div>
+
+  <footer id="footer"></footer>
+</div>
+
+<script>
+"use strict";
+const SVGNS = "http://www.w3.org/2000/svg";
+const PALETTE = ["#2f6df6","#1f9d6b","#f5a623","#9b59d0","#e9573f","#16b5c4","#ef6fb0","#7c8aa0","#5b8def","#c9a227"];
+const fmt0 = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 });
+const fmt2 = new Intl.NumberFormat("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+let DATA = null;
+
+function scrollToSection(id) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.scrollIntoView({ behavior: "smooth", block: "center" });
+  el.classList.add("flash-highlight");
+  setTimeout(() => el.classList.remove("flash-highlight"), 1600);
+}
+
+/* ---------- helpers ---------- */
+function svgEl(tag, attrs) {
+  const e = document.createElementNS(SVGNS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  return e;
+}
+function money(v, ccy) {
+  if (v === null || v === undefined || isNaN(v)) return "n/a";
+  ccy = ccy || "SGD";
+  return (ccy + " " + fmt2.format(v));
+}
+function moneyShort(v) {
+  if (v === null || v === undefined || isNaN(v)) return "n/a";
+  const a = Math.abs(v);
+  if (a >= 1e6) return (v/1e6).toFixed(2) + "M";
+  if (a >= 1e3) return (v/1e3).toFixed(1) + "k";
+  return fmt0.format(v);
+}
+function pct(v) { return (v === null || v === undefined || isNaN(v)) ? "n/a" : v.toFixed(1) + "%"; }
+function cls(v) { return v > 0 ? "pos" : (v < 0 ? "neg" : ""); }
+function sgn(v) { return v > 0 ? "+" : ""; }
+
+// Net worth (SGD). total_sgd_equivalent may be a number, a breakdown dict,
+// or null (when FX is unavailable across multiple currencies).
+function netWorthSgd() {
+  const t = DATA && DATA.asset_composition ? DATA.asset_composition.total_sgd_equivalent : undefined;
+  if (t === null || t === undefined) return null;
+  if (typeof t === "number") return t;
+  return (t.cash || 0) + (t.fixed_deposit || 0) + (t.investments || 0) - (t.liabilities || 0);
+}
+
+// Convert an amount in `ccy` to SGD using fx_rates (rate = units of ccy per 1 SGD).
+function toSgd(amount, ccy) {
+  if (amount === null || amount === undefined) return null;
+  ccy = (ccy || "SGD").toUpperCase();
+  if (ccy === "SGD") return amount;
+  const r = DATA && DATA.fx_rates ? DATA.fx_rates[ccy] : undefined;
+  if (!r) return null;
+  return amount / r;
+}
+
+/* ---------- generic charts ---------- */
+function setupSvg(mount, w, h) {
+  mount.innerHTML = "";
+  const svg = svgEl("svg", { viewBox: `0 0 ${w} ${h}`, class: "chart", width: "100%", preserveAspectRatio: "xMinYMin meet" });
+  mount.appendChild(svg);
+  return svg;
+}
+function niceTicks(min, max, count) {
+  if (min === max) { max = min + 1; }
+  const span = max - min;
+  const step0 = span / count;
+  const mag = Math.pow(10, Math.floor(Math.log10(step0)));
+  const norm = step0 / mag;
+  let step;
+  if (norm < 1.5) step = 1; else if (norm < 3) step = 2; else if (norm < 7) step = 5; else step = 10;
+  step *= mag;
+  const lo = Math.floor(min / step) * step;
+  const hi = Math.ceil(max / step) * step;
+  const ticks = [];
+  for (let v = lo; v <= hi + step * 0.5; v += step) ticks.push(v);
+  return { ticks, lo, hi };
+}
+function yAxis(svg, x0, y0, h, lo, hi, ticks, w) {
+  const yOf = v => y0 - (v - lo) / (hi - lo) * h;
+  ticks.forEach(t => {
+    const y = yOf(t);
+    svg.appendChild(svgEl("line", { x1: x0, y1: y, x2: x0 + w, y2: y, stroke: "#eef1f6", "stroke-width": 1 }));
+    const lbl = svgEl("text", { x: x0 - 8, y: y + 4, "text-anchor": "end", "font-size": 10, fill: "#9aa5b1" });
+    lbl.textContent = moneyShort(t);
+    svg.appendChild(lbl);
+  });
+  return yOf;
+}
+function xLabels(svg, x0, y0, w, labels) {
+  const n = labels.length;
+  if (!n) return;
+  labels.forEach((lb, i) => {
+    const x = n === 1 ? x0 + w / 2 : x0 + (w * i) / (n - 1);
+    const t = svgEl("text", { x, y: y0 + 16, "text-anchor": "middle", "font-size": 10, fill: "#9aa5b1" });
+    t.textContent = lb;
+    svg.appendChild(t);
+  });
+}
+function legend(mount, items) {
+  const div = document.createElement("div");
+  div.className = "legend";
+  items.forEach((it, i) => {
+    const s = document.createElement("span");
+    s.innerHTML = `<span class="dot" style="background:${it.color || PALETTE[i % PALETTE.length]}"></span>${it.label}`;
+    div.appendChild(s);
+  });
+  mount.appendChild(div);
+}
+
+function lineChart(mount, opts) {
+  const W = 720, H = 300, m = { t: 14, r: 14, b: 28, l: 56 };
+  const w = W - m.l - m.r, h = H - m.t - m.b;
+  const svg = setupSvg(mount, W, H);
+  const all = [];
+  opts.series.forEach(s => s.values.forEach(v => { if (v !== null && v !== undefined) all.push(v); }));
+  if (!all.length) { mount.innerHTML = '<p class="empty">No data available.</p>'; return; }
+  let min = Math.min(...all), max = Math.max(...all);
+  if (min > 0) min = 0;
+  const { ticks, lo, hi } = niceTicks(min, max, 4);
+  const yOf = yAxis(svg, m.l, m.t + h, h, lo, hi, ticks, w);
+  xLabels(svg, m.l, m.t + h, w, opts.labels);
+  const xOf = i => opts.labels.length === 1 ? m.l + w / 2 : m.l + (w * i) / (opts.labels.length - 1);
+  opts.series.forEach((s, si) => {
+    const color = s.color || PALETTE[si % PALETTE.length];
+    const pts = s.values.map((v, i) => [xOf(i), v === null ? null : yOf(v)]);
+    if (opts.area) {
+      let d = `M ${pts[0][0]} ${yOf(lo)}`;
+      pts.forEach(p => { d += ` L ${p[0]} ${p[1] === null ? yOf(lo) : p[1]}`; });
+      d += ` L ${pts[pts.length - 1][0]} ${yOf(lo)} Z`;
+      svg.appendChild(svgEl("path", { d, fill: color, "fill-opacity": 0.10, stroke: "none" }));
+    }
+    let d = "";
+    pts.forEach((p, i) => { d += (i ? " L " : "M ") + p[0] + " " + (p[1] === null ? yOf(lo) : p[1]); });
+    svg.appendChild(svgEl("path", { d, fill: "none", stroke: color, "stroke-width": 2.2, "stroke-linejoin": "round" }));
+    pts.forEach((p, i) => {
+      if (p[1] === null) return;
+      const c = svgEl("circle", { cx: p[0], cy: p[1], r: 3.2, fill: color });
+      if (opts.onClick) { c.classList.add("clickable"); c.addEventListener("click", (e) => opts.onClick(i, si)); }
+      const t = svgEl("title", {}); t.textContent = `${opts.labels[i]}: ${money(s.values[i])}`;
+      c.appendChild(t); svg.appendChild(c);
+    });
+  });
+  if (opts.series.length > 1) legend(mount, opts.series.map((s, i) => ({ label: s.name, color: s.color || PALETTE[i % PALETTE.length] })));
+}
+
+function groupedBarChart(mount, opts) {
+  const W = 720, H = 300, m = { t: 14, r: 14, b: 28, l: 56 };
+  const w = W - m.l - m.r, h = H - m.t - m.b;
+  const svg = setupSvg(mount, W, H);
+  const all = [];
+  opts.series.forEach(s => s.values.forEach(v => { if (v !== null && v !== undefined) all.push(v); }));
+  if (!all.length) { mount.innerHTML = '<p class="empty">No data available.</p>'; return; }
+  const max = Math.max(...all), min = Math.min(0, ...all);
+  const { ticks, lo, hi } = niceTicks(min, max, 4);
+  const yOf = yAxis(svg, m.l, m.t + h, h, lo, hi, ticks, w);
+  xLabels(svg, m.l, m.t + h, w, opts.labels);
+  const n = opts.labels.length, ns = opts.series.length;
+  const groupW = w / Math.max(n, 1);
+  const barW = Math.min(36, (groupW * 0.7) / ns);
+  const onClick = opts.onClick;
+  opts.labels.forEach((lb, gi) => {
+    const gx = m.l + groupW * gi + groupW / 2;
+    opts.series.forEach((s, si) => {
+      const v = s.values[gi];
+      if (v === null || v === undefined) return;
+      const color = s.color || PALETTE[si % PALETTE.length];
+      const x = gx - (ns * barW) / 2 + si * barW;
+      const y = yOf(Math.max(v, 0)), y0 = yOf(0);
+      const rect = svgEl("rect", { x, y: Math.min(y, y0), width: barW - 2, height: Math.abs(y0 - y) || 1, fill: color, rx: 3 });
+      if (onClick) { rect.classList.add("clickable"); rect.addEventListener("click", () => onClick(gi, si)); }
+      const t = svgEl("title", {}); t.textContent = `${lb} · ${s.name}: ${money(v)}`;
+      rect.appendChild(t); svg.appendChild(rect);
+    });
+  });
+  if (ns > 1) legend(mount, opts.series.map((s, i) => ({ label: s.name, color: s.color || PALETTE[i % PALETTE.length] })));
+}
+
+function donut(mount, items, centerTop, centerSub, onClick) {
+  const size = 200, cx = size / 2, cy = size / 2, r = 78, sw = 26;
+  const svg = setupSvg(mount, size, size);
+  const total = items.reduce((a, b) => a + b.value, 0);
+  if (!total) { mount.innerHTML = '<p class="empty">No data.</p>'; return; }
+  const circ = 2 * Math.PI * r;
+  let off = 0;
+  const g = svgEl("g", { transform: `rotate(-90 ${cx} ${cy})` });
+  items.forEach((it, i) => {
+    const len = (it.value / total) * circ;
+    const c = svgEl("circle", {
+      cx, cy, r, fill: "none", stroke: it.color || PALETTE[i % PALETTE.length],
+      "stroke-width": sw, "stroke-dasharray": `${len} ${circ - len}`,
+      "stroke-dashoffset": -off,
+    });
+    if (onClick) { c.classList.add("clickable"); c.addEventListener("click", () => onClick(i)); }
+    const t = svgEl("title", {}); t.textContent = `${it.label}: ${money(it.value)} (${(it.value/total*100).toFixed(1)}%)`;
+    c.appendChild(t); g.appendChild(c);
+    off += len;
+  });
+  svg.appendChild(g);
+  const ct = svgEl("text", { x: cx, y: cy - 4, "text-anchor": "middle", "font-size": 15, "font-weight": 700, fill: "#1f2733" });
+  ct.textContent = centerTop; svg.appendChild(ct);
+  const cs = svgEl("text", { x: cx, y: cy + 14, "text-anchor": "middle", "font-size": 10, fill: "#6b7785" });
+  cs.textContent = centerSub || ""; svg.appendChild(cs);
+}
+
+/* ---------- renderers ---------- */
+function renderCards() {
+  const ac = DATA.asset_composition || {};
+  const nw = netWorthSgd();
+  const cf = (DATA.cash_flow && DATA.cash_flow.summary) || {};
+  const income = cf.income_total_sgd, expense = cf.expense_total_sgd, net = cf.net_operating_sgd;
+  const cards = [
+    { label: "Net Worth", value: money(nw), delta: nw === null ? "FX unavailable" : "SGD equivalent", cls: "" },
+    { label: "Net Cash Flow", value: money(net), delta: net === null ? "—" : sgn(net) + money(net), cls: cls(net) },
+    { label: "Income", value: money(income), delta: "period", cls: "" },
+    { label: "Spending", value: money(expense), delta: "period", cls: "" },
+  ];
+  const host = document.getElementById("cards");
+  host.innerHTML = "";
+  cards.forEach(c => {
+    const d = document.createElement("div");
+    d.className = "card";
+    d.innerHTML = `<div class="label">${c.label}</div><div class="value">${c.value}</div>` +
+      (c.delta ? `<div class="delta ${c.cls}">${c.delta}</div>` : "");
+    host.appendChild(d);
+  });
+}
+
+function renderNetWorth(mode) {
+  const trends = DATA.trends || {};
+  const months = trends.months || [];
+  const host = document.getElementById("networth-chart");
+  if (mode === "trend") {
+    lineChart(host, {
+      labels: months,
+      area: true,
+      series: [{ name: "Net Worth", color: "#2f6df6", values: trends.net_worth_sgd || [] }],
+      onClick: () => scrollToSection("networth-panel"),
+    });
+  } else {
+    // Stacked bar of current balance sheet composition per currency.
+    const byCur = (DATA.asset_composition && DATA.asset_composition.by_currency) || {};
+    const ccies = Object.keys(byCur);
+    const classes = [
+      { key: "cash", name: "Cash", color: "#2f6df6" },
+      { key: "fixed_deposit", name: "Fixed Deposit", color: "#1f9d6b" },
+      { key: "investments", name: "Investments", color: "#f5a623" },
+    ];
+    const series = classes.map(cl => ({
+      name: cl.name, color: cl.color,
+      values: ccies.map(c => toSgd(byCur[c][cl.key], c)),
+    }));
+    groupedBarChart(host, { labels: ccies.length ? ccies : [""], series,
+      onClick: () => scrollToSection("networth-panel") });
+  }
+}
+
+function renderCashFlow() {
+  const tr = DATA.trends || {};
+  const months = tr.months || [];
+  groupedBarChart(document.getElementById("cashflow-chart"), {
+    labels: months,
+    series: [
+      { name: "Income", color: "#1f9d6b", values: tr.income_total_sgd || [] },
+      { name: "Expense", color: "#e9573f", values: tr.expense_total_sgd || [] },
+      { name: "Net", color: "#2f6df6", values: tr.cash_flow_net_sgd || [] },
+    ],
+    onClick: () => scrollToSection("income-panel"),
+  });
+}
+
+function renderAssets() {
+  const ac = DATA.asset_composition || {};
+  const byCur = ac.by_currency || {};
+  const ccies = Object.keys(byCur);
+  // SGD-equivalent per asset class for donut.
+  const classes = [
+    { key: "cash", name: "Cash", color: "#2f6df6" },
+    { key: "fixed_deposit", name: "Fixed Deposit", color: "#1f9d6b" },
+    { key: "investments", name: "Investments", color: "#f5a623" },
+    { key: "liabilities", name: "Liabilities", color: "#d9534f" },
+  ];
+  const sgdByClass = {};
+  classes.forEach(cl => {
+    let s = 0; ccies.forEach(c => { const v = toSgd(byCur[c][cl.key], c); if (v) s += v; });
+    sgdByClass[cl.key] = s;
+  });
+  const donutItems = classes.filter(cl => sgdByClass[cl.key] > 0)
+    .map(cl => ({ label: cl.name, value: sgdByClass[cl.key], color: cl.color }));
+  const total = netWorthSgd();
+  donut(document.getElementById("asset-donut"), donutItems,
+    total === null ? "n/a" : moneyShort(total), "SGD equiv",
+    () => scrollToSection("asset-table"));
+  // by-currency table — transposed: rows = asset classes, columns = currencies
+  const tbl = document.createElement("table");
+  const rowLabels = ["Cash", "Fixed Deposit", "Investments", "Liabilities", "Net Position"];
+  const keys = ["cash", "fixed_deposit", "investments", "liabilities"];
+  // header: row label + one col per currency + SGD Equiv
+  let hdr = "<thead><tr><th></th>";
+  ccies.forEach(c => hdr += `<th>${c}</th>`);
+  hdr += "<th>SGD Equiv</th></tr></thead>";
+  tbl.innerHTML = hdr;
+  const tb = document.createElement("tbody");
+  rowLabels.forEach((label, idx) => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td><strong>${label}</strong></td>`;
+    let sgdTotal = 0;
+    ccies.forEach(c => {
+      let val;
+      if (label === "Net Position") {
+        val = (byCur[c].cash || 0) + (byCur[c].fixed_deposit || 0) + (byCur[c].investments || 0) - (byCur[c].liabilities || 0);
+      } else {
+        val = byCur[c][keys[idx]] || 0;
+      }
+      // Display liabilities as negative numbers
+      const displayVal = label === "Liabilities" ? -Math.abs(val) : val;
+      const sgd = toSgd(displayVal, c);
+      sgdTotal += sgd || 0;
+      const cls = (label === "Liabilities" || (label === "Net Position" && sgdTotal < 0)) ? "neg" : "";
+      tr.innerHTML += `<td class="${cls}">${fmt2.format(displayVal)}</td>`;
+    });
+    const totalCls = (label === "Liabilities" || (label === "Net Position" && sgdTotal < 0)) ? "neg" : "";
+    tr.innerHTML += `<td class="${totalCls}"><strong>${moneyShort(sgdTotal)}</strong></td>`;
+    tb.appendChild(tr);
+  });
+  tbl.appendChild(tb);
+  const host = document.getElementById("asset-table");
+  host.innerHTML = "";
+  host.appendChild(tbl);
+}
+
+function renderIncome() {
+  const ia = DATA.income_analysis || {};
+  // Income trend line only (composition donut + table moved to Income Composition panel).
+  const tr = ia.trend || {};
+  const months = tr.months || [];
+  const bySourceTrend = tr.by_source || {};
+  const series = Object.keys(bySourceTrend).map((s, i) => ({
+    name: s, color: PALETTE[i % PALETTE.length], values: bySourceTrend[s],
+  }));
+  if (months.length && series.length) {
+    lineChart(document.getElementById("income-trend"), { labels: months, series,
+      onClick: () => scrollToSection("income-panel") });
+  } else {
+    document.getElementById("income-trend").innerHTML = '<p class="empty">No trend data.</p>';
+  }
+}
+
+function renderSpending() {
+  const sa = DATA.spending_analysis || {};
+  const byCat = sa.by_category || [];
+  const donutItems = byCat.map((c, i) => ({
+    label: c.subcategory || c.category, value: c.amount_sgd || 0, color: PALETTE[i % PALETTE.length],
+  }));
+  donut(document.getElementById("spend-donut"), donutItems.filter(d => d.value > 0),
+    moneyShort(byCat.reduce((a, b) => a + (b.amount_sgd || 0), 0)), "spend",
+    () => scrollToSection("spend-split"));
+  // discretionary split
+  const ds = sa.discretionary_split || {};
+  const splitHost = document.getElementById("spend-split");
+  splitHost.innerHTML = "";
+  const sdiv = document.createElement("div");
+  sdiv.style.fontSize = "13px";
+  sdiv.innerHTML =
+    `<div style="margin-bottom:8px"><span class="pill">Discretionary</span> ${money(ds.discretionary_sgd)} <span class="na">(${pct(ds.discretionary_pct)})</span></div>` +
+    `<div><span class="pill">Non-discretionary</span> ${money(ds.non_discretionary_sgd)} <span class="na">(${pct(ds.non_discretionary_pct)})</span></div>`;
+  splitHost.appendChild(sdiv);
+  // trend (stacked area of top categories)
+  const tr = sa.trend || {};
+  const months = tr.months || [];
+  const byCatTrend = tr.by_category || {};
+  const series = Object.keys(byCatTrend).map((c, i) => ({
+    name: c, color: PALETTE[i % PALETTE.length], values: byCatTrend[c],
+  }));
+  if (months.length && series.length) {
+    lineChart(document.getElementById("spend-chart"), { labels: months, area: true, series,
+      onClick: () => scrollToSection("spending-panel") });
+  } else {
+    document.getElementById("spend-chart").innerHTML = '<p class="empty">No trend data.</p>';
+  }
+}
+
+function renderMerchants() {
+  const list = (DATA.spending_analysis && DATA.spending_analysis.top_merchants) || [];
+  const ul = document.getElementById("merchants");
+  ul.innerHTML = "";
+  if (!list.length) { ul.innerHTML = '<li class="empty">No merchant data.</li>'; return; }
+  const tags = { dining: "cat-tag-dining", travel: "cat-tag-travel", shopping: "cat-tag-shopping",
+    transport: "cat-tag-transport", groceries: "cat-tag-groceries", utilities: "cat-tag-utilities",
+    fees: "cat-tag-fees", healthcare: "cat-tag-healthcare", insurance: "cat-tag-insurance",
+    entertainment: "cat-tag-entertainment", subscriptions: "cat-tag-subscriptions",
+    education: "cat-tag-education" };
+  function tagCls(c) { const k = (c || "other").toLowerCase().replace(/[^a-z]/g, ""); return "cat-tag " + (tags[k] || "cat-tag-default"); }
+  list.forEach(m => {
+    const li = document.createElement("li");
+    li.innerHTML = `<span class="${tagCls(m.category)}">${m.category || "Uncategorized"}</span>` +
+      `<span class="name" title="${m.merchant}">${m.merchant}</span>` +
+      `<span class="amount">${money(m.amount_sgd)}</span>`;
+    ul.appendChild(li);
+  });
+}
+
+function renderTopIncome() {
+  const bySource = (DATA.income_analysis && DATA.income_analysis.by_source) || [];
+  const sorted = [...bySource].sort((a, b) => (b.total_sgd || 0) - (a.total_sgd || 0));
+  const host = document.getElementById("income-table");
+  host.innerHTML = "";
+  if (!sorted.length) { host.innerHTML = '<p class="empty">No income data.</p>'; return; }
+  const tbl = document.createElement("table");
+  tbl.innerHTML = "<thead><tr><th>Source</th><th>Total SGD</th><th>%</th></tr></thead>";
+  const tb = document.createElement("tbody");
+  const grand = sorted.reduce((a, s) => a + (s.total_sgd || 0), 0);
+  sorted.forEach(s => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td>${s.subcategory || s.source}</td>` +
+      `<td>${s.total_sgd !== null && s.total_sgd !== undefined ? money(s.total_sgd) : "n/a"}</td>` +
+      `<td>${s.pct !== null && s.pct !== undefined ? pct(s.pct) : ""}</td>`;
+    tb.appendChild(tr);
+  });
+  if (sorted.length > 1) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td><strong>Total</strong></td><td><strong>${money(grand)}</strong></td><td><strong>100.0%</strong></td>`;
+    tb.appendChild(tr);
+  }
+  tbl.appendChild(tb);
+  host.appendChild(tbl);
+}
+
+function renderAccounts() {
+  const av = DATA.account_value_change || {};
+  const rows = [
+    ...(av.current_accounts || []).map(a => ({ ...a, kind: "Account" })),
+    ...(av.fixed_deposits || []).map(a => ({ ...a, kind: "Fixed Deposit" })),
+  ];
+  const host = document.getElementById("accounts-table");
+  if (!rows.length) { host.innerHTML = '<p class="empty">No non-zero account data.</p>'; return; }
+  const tbl = document.createElement("table");
+  tbl.innerHTML = "<thead><tr><th>Account</th><th>Type</th><th>Currency</th><th>Opening</th><th>Closing</th><th>Δ</th></tr></thead>";
+  const tb = document.createElement("tbody");
+  rows.forEach(r => {
+    const delta = r.delta;
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td>${r.name || "—"}</td><td>${r.kind}</td><td>${r.currency || ""}</td>` +
+      `<td class="${r.opening === null ? "na" : ""}">${r.opening === null ? "n/a" : money(r.opening, r.currency)}</td>` +
+      `<td>${money(r.closing, r.currency)}</td>` +
+      `<td class="${delta === null ? "na" : cls(delta)}">${delta === null ? "n/a" : sgn(delta) + money(delta, r.currency)}</td>`;
+    tb.appendChild(tr);
+  });
+  tbl.appendChild(tb);
+  host.innerHTML = ""; host.appendChild(tbl);
+}
+
+function renderInvestments() {
+  const rows = DATA.investment_detail || [];
+  const host = document.getElementById("invest-table");
+  if (!rows.length) { host.innerHTML = '<p class="empty">No investment data.</p>'; return; }
+  const tbl = document.createElement("table");
+  tbl.innerHTML = "<thead><tr><th>Fund</th><th>Ccy</th><th>Units</th><th>Price</th><th>Valuation</th>" +
+    "<th>Cost Basis</th><th>Unrealized P&amp;L</th><th>%</th></tr></thead>";
+  const tb = document.createElement("tbody");
+  rows.forEach(r => {
+    const pnl = r.unrealized_pnl;
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td>${r.name || "—"}</td><td>${r.currency || ""}</td>` +
+      `<td>${r.units != null ? fmt2.format(r.units) : "—"}</td>` +
+      `<td>${r.price != null ? money(r.price, r.currency) : "—"}</td>` +
+      `<td>${money(r.valuation, r.currency)}</td>` +
+      `<td class="${r.cost_basis == null ? "na" : ""}">${r.cost_basis == null ? "n/a" : money(r.cost_basis, r.currency)}</td>` +
+      `<td class="${pnl == null ? "na" : cls(pnl)}">${pnl == null ? "n/a" : sgn(pnl) + money(pnl, r.currency)}</td>` +
+      `<td class="${r.pnl_pct == null ? "na" : cls(r.pnl_pct)}">${r.pnl_pct == null ? "n/a" : sgn(r.pnl_pct) + r.pnl_pct.toFixed(1) + "%"}</td>`;
+    tb.appendChild(tr);
+  });
+  tbl.appendChild(tb);
+  host.innerHTML = ""; host.appendChild(tbl);
+}
+
+function render(data) {
+  DATA = data;
+  if (data.error) {
+    document.getElementById("loader").style.display = "block";
+    document.getElementById("loader").innerHTML = '<p class="empty">' + data.error + '</p>';
+    return;
+  }
+  document.getElementById("loader").style.display = "none";
+  document.getElementById("app").style.display = "block";
+  const p = data.period || {};
+  document.getElementById("range").textContent = (p.from && p.to) ? `${p.from} → ${p.to}` : "";
+  document.getElementById("subtitle").textContent =
+    "Base currency: " + (data.base_currency || "SGD") +
+    (data.fx_rates && Object.keys(data.fx_rates).length ? " · FX rates loaded" : " · FX rates n/a");
+
+  renderCards();
+  renderNetWorth("trend");
+  renderCashFlow();
+  renderAssets();
+  renderIncome();
+  renderTopIncome();
+  renderSpending();
+  renderMerchants();
+  renderAccounts();
+  renderInvestments();
+
+  // net worth toggle
+  const toggle = document.getElementById("nw-toggle");
+  toggle.querySelectorAll("button").forEach(b => b.addEventListener("click", () => {
+    toggle.querySelectorAll("button").forEach(x => x.classList.remove("active"));
+    b.classList.add("active");
+    renderNetWorth(b.dataset.mode);
+  }));
+
+  document.getElementById("footer").textContent =
+    "Generated by personal-finance-analysis · open with a local server or pick the JSON file above.";
+}
+
+/* ---------- load ---------- */
+async function loadAuto() {
+  try {
+    const res = await fetch("sample_dashboard_data.json", { cache: "no-store" });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const data = await res.json();
+    render(data);
+  } catch (e) {
+    document.getElementById("loader-fallback").style.display = "block";
+  }
+}
+document.getElementById("file").addEventListener("change", ev => {
+  const f = ev.target.files[0];
+  if (!f) return;
+  const reader = new FileReader();
+  reader.onload = () => { try { render(JSON.parse(reader.result)); } catch (err) { alert("Invalid JSON: " + err); } };
+  reader.readAsText(f);
+});
+loadAuto();
+</script>
+</body>
+</html>
