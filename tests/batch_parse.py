@@ -13,6 +13,9 @@ Usage:
 from __future__ import annotations
 
 import json
+import os
+import shutil
+import stat
 import sys
 import traceback
 from collections import Counter
@@ -34,6 +37,30 @@ from pfa_categorize.categorize import categorize  # noqa: E402
 CACHE_DIR = REPO_ROOT / "tests" / "cache"
 OUTPUT_DIR = REPO_ROOT / "tests" / "outputs"
 RULES_PATH = REPO_ROOT / "packages" / "pfa-categorize" / "references" / "categories.yaml"
+
+
+def _clear_readonly(path: Path) -> None:
+    """Remove the read-only flag from *path* (file or dir).
+
+    On Windows / OneDrive, ``tests/outputs`` can end up with the ``ReadOnly``
+    attribute set, which makes ``shutil.rmtree`` and ``Path.mkdir`` raise
+    ``PermissionError: Access is denied``. Clearing the flag first avoids that.
+    """
+    try:
+        if path.is_dir():
+            for entry in path.iterdir():
+                _clear_readonly(entry)
+        os.chmod(path, stat.S_IWRITE | stat.S_IREAD)
+    except (OSError, PermissionError):
+        pass
+
+
+def _reset_output_dir() -> None:
+    """Remove and recreate OUTPUT_DIR, tolerating read-only / OneDrive flags."""
+    if OUTPUT_DIR.exists():
+        _clear_readonly(OUTPUT_DIR)
+        shutil.rmtree(OUTPUT_DIR, ignore_errors=True)
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def _step1_parse_pdfs(pdf_paths: list[Path]) -> bool:
@@ -217,11 +244,8 @@ def main() -> None:
         return
 
     # Clean up previous outputs
-    if OUTPUT_DIR.exists():
-        import shutil
-        shutil.rmtree(OUTPUT_DIR)
-        print(f"Cleaned: {OUTPUT_DIR}\n")
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    _reset_output_dir()
+    print(f"Cleaned: {OUTPUT_DIR}\n")
 
     # ── Step 1: Parse all PDFs ─────────────────────────────────────────────
     print("── Step 1: Parse PDFs ──")
