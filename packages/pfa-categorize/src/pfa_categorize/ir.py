@@ -4,8 +4,7 @@ Parses consolidated.ir.json (from bank-ir-consolidate) into a unified
 ``TxnIR`` dataclass consumed by both ``categorize.py`` and
 ``render_md.py``.
 
-Schema aligned with sg_bank_pdf_parser.ir_schema:
-https://github.com/shaowen310/sg-bank-pdf-parser
+Schema aligned with pfa_ir_schema.ir_schema.
 """
 from __future__ import annotations
 
@@ -13,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from sg_bank_pdf_parser.ir_schema import from_json as _official_from_json  # pyright: ignore[reportMissingImports]
+from pfa_ir_schema import from_json as _official_from_json
 
 
 @dataclass

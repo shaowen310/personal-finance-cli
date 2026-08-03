@@ -1,3 +1,3 @@
-from .consolidate import consolidate_statements
+from .consolidate import consolidate_statements, main
 
-__all__ = ["consolidate_statements"]
+__all__ = ["consolidate_statements", "main"]

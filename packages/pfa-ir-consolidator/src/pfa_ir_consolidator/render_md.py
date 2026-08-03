@@ -19,7 +19,7 @@ from typing import Any
 
 # Allow running as a standalone script from scripts/ or the repo root.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from pfa_ir_consolidator._parser_loader import load_parser_modules  # noqa: E402
+import pfa_ir_schema  # noqa: E402
 from pfa_ir_consolidator.render_model import build_render_model, TXN_SECTION_ORDER  # noqa: E402
 from pfa_ir_consolidator.fx_rates import (  # noqa: E402
     FXResult,
@@ -515,9 +515,8 @@ def main() -> None:
     )
     args = ap.parse_args()
 
-    pm = load_parser_modules(args.parser_dir)
     text = Path(args.input).read_text(encoding="utf-8")
-    stmt = pm.ir_schema.from_json(text)
+    stmt = pfa_ir_schema.from_json(text)
 
     # Resolve FX rates on demand: union of the default watch-list and every
     # non-SGD currency actually present in the statement's accounts.
@@ -532,10 +531,13 @@ def main() -> None:
         force_refresh=args.fx_force_refresh,
     )
 
+    from pfa_parser.renderers.helpers import md_masked_description as _md_helpers
+    import pfa_ir_schema.common as _ir_common
+
     md = render(
         build_render_model(stmt, fx_rates=fx.rates),
-        pm.helpers,
-        pm.common,
+        _md_helpers,
+        _ir_common,
         do_mask=not args.no_mask,
         fx_result=fx,
     )

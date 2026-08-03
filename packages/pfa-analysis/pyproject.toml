@@ -8,6 +8,7 @@ version = "0.1.0"
 description = "Personal finance analysis and reporting engine"
 requires-python = ">=3.12"
 dependencies = [
+    "pfa-ir-schema>=0.1.0",
     "pfa-parser>=0.1.0",
     "pfa-ir-consolidator>=0.1.0",
     "pfa-categorize>=0.1.0",

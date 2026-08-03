@@ -39,7 +39,7 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from pfa_ir_consolidator._parser_loader import load_parser_modules  # noqa: E402
+import pfa_ir_schema  # noqa: E402
 from pfa_ir_consolidator.render_model import build_render_model  # noqa: E402
 from pfa_ir_consolidator.render_model_io import embedded_fx_rates, save_render_model  # noqa: E402
 
@@ -60,10 +60,9 @@ def main() -> None:
     _ = ap.add_argument("--indent", type=int, default=2, help="JSON indent")
     args = ap.parse_args()
 
-    pm = load_parser_modules(args.parser_dir)
     text = Path(args.input).read_text(encoding="utf-8")
     try:
-        ir = pm.ir_schema.from_json(text)
+        ir = pfa_ir_schema.from_json(text)
     except ValueError as e:
         sys.exit(f"[error] {args.input}: {e}")
 

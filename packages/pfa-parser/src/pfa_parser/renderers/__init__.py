@@ -1,0 +1,1 @@
+"""IR (ParsedStatement) → Markdown renderers."""

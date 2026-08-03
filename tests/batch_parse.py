@@ -19,15 +19,15 @@ from collections import Counter
 from pathlib import Path
 
 import pdfplumber
-from sg_bank_pdf_parser.convert_statement import detect_type
-from sg_bank_pdf_parser.extractors.registry import get_extractor
+from pfa_parser.convert_statement import detect_type
+from pfa_parser.extractors.registry import get_extractor
+from pfa_ir_schema import from_json as ir_from_json
 
 # Make repo root importable
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
 from pfa_ir_consolidator.consolidate import consolidate_statements  # noqa: E402
-from pfa_ir_consolidator._parser_loader import load_parser_modules  # noqa: E402
 from pfa_categorize.categorize import categorize  # noqa: E402
 
 
@@ -74,16 +74,13 @@ def _step2_consolidate() -> Path | None:
 
     print(f"  Consolidating {len(ir_paths)} .ir.json files …", end=" ", flush=True)
     try:
-        pm = load_parser_modules(None)
-        ir = pm.ir_schema
-
         stmts_with_paths: list[tuple[str, object]] = []
         for p in ir_paths:
-            stmt = ir.from_json(p.read_text(encoding="utf-8"))
+            stmt = ir_from_json(p.read_text(encoding="utf-8"))
             stmts_with_paths.append((str(p), stmt))
 
         consolidated, total_in, deduped, filtered = consolidate_statements(
-            stmts_with_paths, ir, do_dedup=True
+            stmts_with_paths, do_dedup=True
         )
 
         # Transfer detection & postprocessing
@@ -97,7 +94,9 @@ def _step2_consolidate() -> Path | None:
         consolidated = detect_intra_bank_transfers(consolidated)
         consolidated = detect_currency_conversions(consolidated)
         consolidated = detect_cc_payments(consolidated)
-        consolidated = pm.postprocess.verify_txn_links(consolidated)
+
+        from pfa_parser.postprocess import verify_txn_links
+        consolidated = verify_txn_links(consolidated)
 
         out_path = OUTPUT_DIR / "consolidated.ir.json"
         _ = out_path.write_text(consolidated.to_json(indent=2), encoding="utf-8")

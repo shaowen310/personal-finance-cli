@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""consolidate.py — merge multiple sg-bank-pdf-parser IR JSON files.
+"""consolidate.py — merge multiple IR JSON files.
 
 Reads N ``*.ir.json`` (``ParsedStatement``) files, merges accounts grouped by
 ``(institution, account_no, name)``, de-duplicates transactions by ``txn_id``,
@@ -13,14 +13,15 @@ from __future__ import annotations
 
 import argparse
 import sys
-import types
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 # Allow running as a standalone script from scripts/ or the repo root.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from pfa_ir_consolidator._parser_loader import load_parser_modules  # noqa: E402
+
+from pfa_ir_schema import from_json, Account, ParserInfo, StatementMeta, ParsedStatement  # noqa: E402
+
 from pfa_ir_consolidator.detect_transfers import (  # noqa: E402
     detect_cc_payments,
     detect_currency_conversions,
@@ -109,7 +110,6 @@ def _merge_inv(accs: list[Any]) -> list[Any] | None:
 
 def consolidate_statements(
     stmts_with_paths: list[tuple[str, Any]],
-    ir: types.ModuleType,
     do_dedup: bool,
 ) -> tuple[Any, int, int, int]:
     """``stmts_with_paths`` is a list of (path, ParsedStatement)."""
@@ -172,7 +172,7 @@ def consolidate_statements(
         p_from, p_to = key_periods.get((_inst, _no, _currency), (None, None))
 
         merged_accounts.append(
-            ir.Account(
+            Account(
                 name=base.name,
                 account_no=base.account_no,
                 account_type=base.account_type,
@@ -218,7 +218,7 @@ def consolidate_statements(
         if inst and inst not in _seen_inst:
             _seen_inst.add(inst)
             _insts.append(inst)
-    meta = ir.StatementMeta(
+    meta = StatementMeta(
         institution=", ".join(_insts),
         account_holder=None,
         period_from=min(periods_from_norm) if periods_from_norm else None,
@@ -239,10 +239,10 @@ def consolidate_statements(
         if val is not None and not _is_iso_date(val):
             warnings.append(f"consolidated {field} is not an ISO date: {val!r}")
 
-    consolidated = ir.ParsedStatement(
+    consolidated = ParsedStatement(
         ir_version=min_ir,
         parsed_at=datetime.now(timezone.utc).isoformat(),
-        parser=ir.ParserInfo(name="bank-ir-consolidate", version=VERSION),
+        parser=ParserInfo(name="bank-ir-consolidate", version=VERSION),
         source_file="",
         statement_meta=meta,
         accounts=merged_accounts,
@@ -260,23 +260,19 @@ def consolidate_statements(
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="Consolidate sg-bank-pdf-parser IR JSON files.")
+    ap = argparse.ArgumentParser(description="Consolidate IR JSON files.")
     _ = ap.add_argument("inputs", nargs="+", help="Input *.ir.json files")
     _ = ap.add_argument("-o", "--out", default="consolidated.ir.json", help="Output IR JSON path")
-    _ = ap.add_argument("--parser-dir", default=None, help="Path to sg-bank-pdf-parser skill dir")
     _ = ap.add_argument("--min-ir-version", default=DEFAULT_MIN_IR_VERSION, help="Minimum accepted ir_version")
     _ = ap.add_argument("--no-dedup", action="store_true", help="Disable txn_id de-duplication")
     _ = ap.add_argument("--indent", type=int, default=2, help="JSON indent")
     args = ap.parse_args()
 
-    pm = load_parser_modules(args.parser_dir)
-    ir = pm.ir_schema
-
     stmts_with_paths: list[tuple[str, Any]] = []
     for path in args.inputs:
         text = Path(path).read_text(encoding="utf-8")
         try:
-            stmt = ir.from_json(text)
+            stmt = from_json(text)
         except ValueError as e:
             sys.exit(f"[error] {path}: {e}")
         if not _version_ge(stmt.ir_version, args.min_ir_version):
@@ -287,13 +283,15 @@ def main() -> None:
         stmts_with_paths.append((str(path), stmt))
 
     consolidated, total_in, deduped, filtered = consolidate_statements(
-        stmts_with_paths, ir, do_dedup=not args.no_dedup
+        stmts_with_paths, do_dedup=not args.no_dedup
     )
     consolidated = detect_inter_bank_transfers(consolidated)
     consolidated = detect_intra_bank_transfers(consolidated)
     consolidated = detect_currency_conversions(consolidated)
     consolidated = detect_cc_payments(consolidated)
-    consolidated = pm.postprocess.verify_txn_links(consolidated)
+
+    from pfa_parser.postprocess import verify_txn_links
+    consolidated = verify_txn_links(consolidated)
 
     transfers = (consolidated.extras or {}).get("consolidation", {}).get("transfers", {})
     inter_bank_detected = transfers.get("inter_bank_detected", 0)

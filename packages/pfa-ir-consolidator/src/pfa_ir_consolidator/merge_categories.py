@@ -41,7 +41,7 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from pfa_ir_consolidator._parser_loader import load_parser_modules  # noqa: E402
+import pfa_ir_schema  # noqa: E402
 from pfa_ir_consolidator.render_model import build_render_model  # noqa: E402
 from pfa_ir_consolidator.render_model_io import (  # noqa: E402
     embedded_fx_rates,
@@ -121,9 +121,8 @@ def main() -> None:
     )
     args = ap.parse_args()
 
-    pm = load_parser_modules(args.parser_dir)
     in_path = Path(args.input)
-    ir = pm.ir_schema.from_json(in_path.read_text(encoding="utf-8"))
+    ir = pfa_ir_schema.from_json(in_path.read_text(encoding="utf-8"))
 
     cat_map = _load_category_map(Path(args.categories))
 

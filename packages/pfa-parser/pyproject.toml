@@ -5,18 +5,16 @@ build-backend = "hatchling.build"
 [project]
 name = "pfa-parser"
 version = "0.1.0"
-description = "Bank statement parser wrapper for personal finance analysis"
+description = "Bank statement PDF parser for personal finance analysis (SG banks: DBS, OCBC, UOB, ICBC)"
 requires-python = ">=3.12"
 dependencies = [
-    "sg-bank-pdf-parser>=0.1.0",
+    "pfa-ir-schema>=0.1.0",
     "pdfplumber>=0.11",
     "pandas>=2.0",
-    "pydantic>=2.0",
 ]
 
 [project.urls]
 Homepage = "https://github.com/shaowen310/personal-finance-cli"
-Repository = "https://github.com/shaowen310/sg-bank-pdf-parser"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/pfa_parser"]
