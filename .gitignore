@@ -1,0 +1,164 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+*.log
+*.pot
+*.pyc
+__pypackages__/
+.ipynb_checkpoints/
+*.egg-info/
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+*.manifest
+*.spec
+pip-log.txt
+pip-delete-this-directory.txt
+celerybeat-schedule
+celerybeat.pid
+*.sage.py
+.spyderproject
+.spyproject
+.ropeproject
+/site-packages/
+.mypy_cache/
+.pytest_cache/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+pids
+*.pid
+logs
+*.log
+*.pstats
+.profile
+*.prof
+*.gsd
+.pylintrc
+.tox/
+.nox/
+.ablog/
+.pyre/
+
+# IDEs and Editors
+.vscode/*.code-snippets
+.codebuddy/plans/
+.vscode/tasks.json
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+*.sublime-*
+.project
+.settings
+*.launch
+.cproject
+.pydevproject
+.metadata
+*.tmproj
+nbproject/
+.index
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# Logs and databases
+*.log
+*.sql
+*.sqlite
+*.sqlite3
+*.db
+
+# Temporary files
+*.tmp
+*.bak
+*.backup
+*.cache
+*.swp
+*.swo
+
+# Compiled files
+*.pyc
+*.pyo
+*.pyd
+*.class
+*.o
+*.obj
+*.dll
+*.exe
+*.so
+*.dylib
+
+# Package files
+*.7z
+*.dmg
+*.gz
+*.iso
+*.jar
+*.rar
+*.tar
+*.zip
+*.msi
+
+# Jupyter Notebook
+.ipynb_checkpoints/
+
+# Coverage reports
+htmlcov/
+
+# Skill local backups (from pack_and_install_skill.py --update-local)
+*.local.backup/
+
+# MkDocs
+/site/
+
+# API docs
+.docs/
+
+# Test outputs
+**/tests/outputs/
+**/tests/cache/
+
+# FX rate cache (bank-ir-consolidate)
+bank-ir-consolidate/cache/
+
+# Plans
+.plan/
