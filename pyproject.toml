@@ -1,0 +1,10 @@
+[tool.pytest.ini_options]
+addopts = "--import-mode=importlib"
+testpaths = [
+    "tests",
+    "packages/pfa-parser/tests",
+    "packages/pfa-ir-consolidator/tests",
+    "packages/pfa-categorize/tests",
+    "packages/pfa-analysis/tests",
+    "apps/pfa-cli/tests",
+]

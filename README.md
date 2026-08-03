@@ -2,22 +2,28 @@
 
 A personal finance analysis CLI tool (`pfa`) that connects bank statement parsing, IR data consolidation, transaction categorization, and financial analysis into a single workflow.
 
+Supported banks: **DBS/POSB**, **OCBC**, **UOB**, **ICBC** (Singapore).
+
 ## Repository Structure
 
 ```
 packages/
-├── pfa-parser/           # Bank statement parser (wraps sg-bank-pdf-parser)
-├── pfa-ir-consolidator/  # IR data consolidation
-├── pfa-categorize/       # Transaction auto-categorization
-└── pfa-analysis/         # Financial analysis & reporting engine
+├── pfa-ir-schema/         # Shared IR data models (Account, Transaction, etc.)
+├── pfa-parser/            # Bank statement PDF parser (detect → extract → IR)
+├── pfa-ir-consolidator/   # IR data consolidation & transfer detection
+├── pfa-categorize/        # Transaction auto-categorization
+└── pfa-analysis/          # Financial analysis & reporting engine
 apps/
-└── pfa-cli/              # CLI entry point + workflow orchestration
+└── pfa-cli/               # CLI entry point + workflow orchestration
 ```
 
 ## Quick Start
 
 ```bash
-# Install all packages in development mode
+# Windows
+powershell -File scripts/setup_dev.ps1
+
+# macOS / Linux
 bash scripts/setup_dev.sh
 
 # Verify installation
@@ -35,19 +41,19 @@ pfa --help
 ## Dependency Graph
 
 ```
-sg-bank-pdf-parser (external)
+pfa-ir-schema          (shared data models, zero heavy deps)
     ↑
-pfa-parser
+pfa-parser             (PDF extraction, all SG bank support)
     ↑
-pfa-ir-consolidator
+pfa-ir-consolidator    (merge & deduplicate IR, detect transfers)
     ↑
-pfa-categorize
+pfa-categorize         (auto-categorize transactions)
     ↑
-pfa-analysis
+pfa-analysis           (financial reports & visualization)
     ↑
-pfa-cli
+pfa-cli                (CLI entry point)
 ```
 
 ## Tech Stack
 
-Python >= 3.12, Click, Pandas, Pydantic, Matplotlib, Hatchling
+Python >= 3.12, Click, pdfplumber, Pandas, Pydantic, Matplotlib, Hatchling
