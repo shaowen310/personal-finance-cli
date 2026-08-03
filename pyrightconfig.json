@@ -1,0 +1,9 @@
+{
+  "reportImplicitRelativeImport": "none",
+  "reportTypedDictNotRequiredAccess": "none",
+  "reportAny": "none",
+  "reportExplicitAny": "none",
+  "reportUnknownVariableType": "none",
+  "reportUnknownArgumentType": "none",
+  "reportUnknownMemberType": "none",
+}
