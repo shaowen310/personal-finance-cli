@@ -13,6 +13,7 @@ jobs:
 
       - name: Install dependencies
         run: |
+          pip install -e packages/pfa-ir-schema
           pip install -e packages/pfa-parser
           pip install -e packages/pfa-ir-consolidator
           pip install -e packages/pfa-categorize
