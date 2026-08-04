@@ -892,8 +892,24 @@ def build_income_expense_drilldowns(
     for row in ir_rows:
         if row.get("is_internal_transfer"):
             continue
-        flow = classify_cash_flow(row)
-        if flow == "Income":
+
+        txn_id = row.get("txn_id", "")
+        cat_full = categories.get(txn_id, "")
+        cat_cls, cat_sub = _split_cat(cat_full) if cat_full else ("", "")
+
+        if cat_cls == "Expense":
+            cat_disp = cat_sub or cat_full or "Uncategorized"
+            exp_ccy[cat_disp][row["currency"]] += float(row["amount"])
+            exp_txns[cat_disp].append({
+                "date": str(row.get("date", "")),
+                "description": str(row.get("description", "")),
+                "amount": abs(float(row["amount"])),
+                "currency": str(row.get("currency", "")),
+                "bank": str(row.get("bank", "")),
+                "account": str(row.get("account", "")),
+                "account_type": str(row.get("account_type", "")),
+            })
+        elif cat_cls == "Income":
             src = _classify_income_source(row["description"])
             src_ccy[src][row["currency"]] += abs(float(row["amount"]))
             src_txns[src].append({
@@ -905,21 +921,37 @@ def build_income_expense_drilldowns(
                 "account": str(row.get("account", "")),
                 "account_type": str(row.get("account_type", "")),
             })
-        elif flow == "Expense":
-            txn_id = row.get("txn_id", "")
-            cat = categories.get(txn_id, "Uncategorized")
-            cat_parts = cat.split(": ", 1)
-            cat_disp = cat_parts[1] if len(cat_parts) == 2 else cat
-            exp_ccy[cat_disp][row["currency"]] += float(row["amount"])
-            exp_txns[cat_disp].append({
-                "date": str(row.get("date", "")),
-                "description": str(row.get("description", "")),
-                "amount": abs(float(row["amount"])),
-                "currency": str(row.get("currency", "")),
-                "bank": str(row.get("bank", "")),
-                "account": str(row.get("account", "")),
-                "account_type": str(row.get("account_type", "")),
-            })
+        elif cat_cls == "Transfer":
+            # Transfers (internal and external) are excluded from income/expense.
+            continue
+        else:
+            # Fallback: transaction not yet categorized — use cash-flow
+            # classification to assign to income or expense.
+            flow = classify_cash_flow(row)
+            if flow == "Income":
+                src = _classify_income_source(row["description"])
+                src_ccy[src][row["currency"]] += abs(float(row["amount"]))
+                src_txns[src].append({
+                    "date": str(row.get("date", "")),
+                    "description": str(row.get("description", "")),
+                    "amount": abs(float(row["amount"])),
+                    "currency": str(row.get("currency", "")),
+                    "bank": str(row.get("bank", "")),
+                    "account": str(row.get("account", "")),
+                    "account_type": str(row.get("account_type", "")),
+                })
+            elif flow == "Expense":
+                cat_disp = cat_full or "Uncategorized"
+                exp_ccy[cat_disp][row["currency"]] += float(row["amount"])
+                exp_txns[cat_disp].append({
+                    "date": str(row.get("date", "")),
+                    "description": str(row.get("description", "")),
+                    "amount": abs(float(row["amount"])),
+                    "currency": str(row.get("currency", "")),
+                    "bank": str(row.get("bank", "")),
+                    "account": str(row.get("account", "")),
+                    "account_type": str(row.get("account_type", "")),
+                })
 
     for src in sorted(src_ccy, key=lambda s: -sum(src_ccy[s].values())):
         income_drill.append({

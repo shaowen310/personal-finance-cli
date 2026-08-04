@@ -8,8 +8,6 @@ Write-Host "Installing pfa-parser..."
 pip install -e (Join-Path $RepoRoot "packages/pfa-parser")
 Write-Host "Installing pfa-ir-consolidator..."
 pip install -e (Join-Path $RepoRoot "packages/pfa-ir-consolidator")
-Write-Host "Installing pfa-categorize..."
-pip install -e (Join-Path $RepoRoot "packages/pfa-categorize")
 Write-Host "Installing pfa-analysis..."
 pip install -e (Join-Path $RepoRoot "packages/pfa-analysis")
 Write-Host "Installing pfa-cli..."

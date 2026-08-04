@@ -9,7 +9,6 @@
         "packages/pfa-fx/src",
         "packages/pfa-parser/src",
         "packages/pfa-ir-consolidator/src",
-        "packages/pfa-categorize/src",
         "packages/pfa-analysis/src",
         "apps/pfa-cli/src"
       ]

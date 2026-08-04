@@ -13,7 +13,7 @@ def run_pipeline(
     Steps:
         1. Parse bank statements via pfa-parser / sg-bank-pdf-parser
         2. Consolidate IR data via pfa-ir-consolidator
-        3. Categorize transactions via pfa-categorize
+        3. Categorize transactions via pfa-analysis
         4. Analyze and generate reports via pfa-analysis
 
     Returns a dict with paths to all output files.

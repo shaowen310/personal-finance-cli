@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from pfa_categorize.ir import parse_ir
+from pfa_analysis.categorize_ir import parse_ir
 
 
 # ---------------------------------------------------------------------------

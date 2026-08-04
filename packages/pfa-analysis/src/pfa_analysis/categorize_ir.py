@@ -1,8 +1,7 @@
-"""Shared IR JSON parser for txn-categorize tools.
+"""Shared IR JSON parser for categorization tools.
 
 Parses consolidated.ir.json (from bank-ir-consolidate) into a unified
-``TxnIR`` dataclass consumed by both ``categorize.py`` and
-``render_md.py``.
+``TxnIR`` dataclass consumed by the categorization pipeline.
 
 Schema aligned with pfa_ir_schema.ir_schema.
 """

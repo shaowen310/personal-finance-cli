@@ -31,12 +31,12 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
 from pfa_ir_consolidator.consolidate import consolidate_statements  # noqa: E402
-from pfa_categorize.categorize import categorize  # noqa: E402
+from pfa_analysis.categorize import categorize  # noqa: E402
 
 
 CACHE_DIR = REPO_ROOT / "tests" / "cache"
 OUTPUT_DIR = REPO_ROOT / "tests" / "outputs"
-RULES_PATH = REPO_ROOT / "packages" / "pfa-categorize" / "references" / "categories.yaml"
+RULES_PATH = REPO_ROOT / "packages" / "pfa-analysis" / "references" / "categories.yaml"
 
 
 def _clear_readonly(path: Path) -> None:
@@ -181,32 +181,8 @@ def _step4_render_report(consolidated_path: Path) -> None:
         print("  categories.json not found — skipping reports.")
         return
 
-    # ── 4a. Categorized Transaction Report ─────────────────────────────────
-    print("  4a. Categorized transaction report …", end=" ", flush=True)
-    try:
-        from pfa_categorize.ir import parse_ir
-        from pfa_categorize.render_md import (
-            build_records,
-            load_categories,
-            render_markdown,
-        )
-
-        ir_data = parse_ir(consolidated_path)
-        categories = load_categories(categories_path)
-        records = build_records(ir_data.txns_raw, categories, ir_data.account_types)
-        md = render_markdown(records, ir_data.meta)
-        out_path = OUTPUT_DIR / "transactions_report.md"
-        _ = out_path.write_text(md, encoding="utf-8")
-        n_total = len(records)
-        n_cat = sum(1 for r in records if r.category != "Other: Other")
-        coverage = n_cat / n_total * 100 if n_total else 0
-        print(f"OK  {n_total} txns, {coverage:.1f}% coverage → {out_path.name}")
-    except Exception:
-        print("FAILED")
-        traceback.print_exc()
-
-    # ── 4b. Balance Sheet & Cash Flow Report ───────────────────────────────
-    print("  4b. Balance sheet & cash flow report …", end=" ", flush=True)
+    # ── 4a. Balance Sheet & Cash Flow Report ───────────────────────────────
+    print("  4a. Finance report …", end=" ", flush=True)
     try:
         from pfa_analysis.analyze import render_consolidated_report
 
