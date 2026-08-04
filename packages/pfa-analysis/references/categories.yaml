@@ -130,6 +130,7 @@ rules:
       - WOK HEY
       - GUZMAN
       - MODUAMY
+      - RAMEN
       # Cafes & bubble tea
       - STARBUCKS
       - KOI
@@ -137,6 +138,7 @@ rules:
       - COMPOSE COFFEE
       - NYLON COFFEE
       - THE DAILY CUT
+      - TOMOCAFE
       # Food courts / hawker
       - HAWKER
       - KOPITIAM
@@ -149,6 +151,7 @@ rules:
       - CHICKEN SOUP
       # Desert
       - 99 OLD TREES DURIAN
+      - MESSINA
       # Food delivery
       - FOODPANDA
       - GRABFOOD
