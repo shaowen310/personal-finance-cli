@@ -256,9 +256,6 @@ def render_report(result: dict[str, Any], consolidated: bool = False,
             out.append(f"| Transfer Out | | {fmt(m['transfer_out'])} |")
             out.append(f"| **Net Operating** (Income \u2212 Expense) | | **{fmt(m['net_operating'])}** |")
             out.append(f"| **Net Change in Cash** | | **{fmt(m['net_change_cash'])}** |")
-            if m["reconciliation_ok"] is not None:
-                flag = "\u2713 matches balance change" if m["reconciliation_ok"] else "\u26a0 gap vs balance (likely external transfer)"
-                out.append(f"| Reconciliation | | {flag} |")
             out.append("")
     else:
         out.append("_Not applicable \u2014 statement has no transactions._\n")
@@ -266,29 +263,47 @@ def render_report(result: dict[str, Any], consolidated: bool = False,
     # ---- Income Breakdown ----------------------------------------------------
     if income_drilldown:
         out.append("## Income Breakdown\n")
-        out.append("| Source | Currency | Amount |")
-        out.append("|---|---:|---:|")
+        # Collect all currencies across all sources.
+        income_ccies: list[str] = sorted(set(
+            c for entry in income_drilldown for c in entry["by_currency"]
+        ))
+        header_parts = ["| Source"]
+        for c in income_ccies:
+            header_parts.append(c)
+        if use_fx:
+            header_parts.append("SGD Eq.")
+        out.append(" | ".join(header_parts) + " |")
+        sep_parts = ["|---"]
+        for _ in income_ccies:
+            sep_parts.append("---:")
+        if use_fx:
+            sep_parts.append("---:")
+        out.append(" | ".join(sep_parts) + " |")
+
         tot_sgd = 0.0
         for entry in income_drilldown:
             source = entry["source"]
-            by_ccy: dict[str, float] = entry["by_currency"]
-            for ccy in sorted(by_ccy):
-                amt = by_ccy[ccy]
-                out.append(f"| {source} | {ccy} | {fmt(amt)} |")
-            if use_fx and by_ccy:
-                assert fx_rates is not None  # guaranteed by use_fx
-                sgd_total = 0.0
-                for ccy, amt in by_ccy.items():
-                    conv = convert_to_sgd(amt, ccy, fx_rates)
-                    if conv is not None:
-                        sgd_total += conv
-                tot_sgd += sgd_total
-                out.append(f"| *{source} (SGD eq.)* | *SGD* | *{fmt(sgd_total)}* |")
-            else:
-                for ccy, amt in by_ccy.items():
+            by_ccy = entry["by_currency"]
+            income_cells: list[str] = [source]
+            row_sgd = 0.0
+            for c in income_ccies:
+                amt = by_ccy.get(c, 0.0)
+                income_cells.append(fmt(amt))
+                if use_fx:
+                    conv = convert_to_sgd(amt, c, fx_rates) or 0.0
+                    row_sgd += conv
+                else:
                     tot_sgd += amt
+            if use_fx:
+                tot_sgd += row_sgd
+                income_cells.append(fmt(row_sgd))
+            out.append(" | ".join(income_cells) + " |")
         if use_fx and tot_sgd:
-            out.append(f"| **Total Income (SGD)** | | **{fmt(tot_sgd)}** |")
+            total_parts = ["| **Total Income**"]
+            for _ in income_ccies:
+                total_parts.append("")
+            total_parts.append(f"**{fmt(tot_sgd)}**")
+            out.append(" | ".join(total_parts) + " |")
         elif not use_fx:
             out.append(f"| **Total Income (per currency above)** | | |")
         out.append("")
@@ -312,30 +327,46 @@ def render_report(result: dict[str, Any], consolidated: bool = False,
     # ---- Expense Breakdown ---------------------------------------------------
     if expense_drilldown:
         out.append("## Expense Breakdown\n")
-        out.append("| Category | Currency | Amount |")
-        out.append("|---|---:|---:|")
+        expense_ccies: list[str] = sorted(set(
+            c for entry in expense_drilldown for c in entry["by_currency"]
+        ))
+        header_parts = ["| Category"]
+        for c in expense_ccies:
+            header_parts.append(c)
+        if use_fx:
+            header_parts.append("SGD Eq.")
+        out.append(" | ".join(header_parts) + " |")
+        sep_parts = ["|---"]
+        for _ in expense_ccies:
+            sep_parts.append("---:")
+        if use_fx:
+            sep_parts.append("---:")
+        out.append(" | ".join(sep_parts) + " |")
+
         totals_sgd = 0.0
         for entry in expense_drilldown:
             cat = entry["category"]
             by_ccy = entry["by_currency"]
-            for ccy in sorted(by_ccy):
-                amt = by_ccy[ccy]
-                out.append(f"| {cat} | {ccy} | {fmt(abs(amt))} |")
-            if use_fx and by_ccy:
-                assert fx_rates is not None  # guaranteed by use_fx
-                sgd_total = 0.0
-                for ccy, amt in by_ccy.items():
-                    conv = convert_to_sgd(amt, ccy, fx_rates)
-                    if conv is not None:
-                        sgd_total += conv
-                totals_sgd += abs(sgd_total)
-                out.append(f"| *{cat} (SGD eq.)* | *SGD* | *{fmt(abs(sgd_total))}* |")
-            else:
-                for ccy, amt in by_ccy.items():
+            expense_cells: list[str] = [cat]
+            row_sgd = 0.0
+            for c in expense_ccies:
+                amt = by_ccy.get(c, 0.0)
+                expense_cells.append(fmt(abs(amt)))
+                if use_fx:
+                    conv = convert_to_sgd(amt, c, fx_rates) or 0.0
+                    row_sgd += abs(conv)
+                else:
                     totals_sgd += abs(amt)
+            if use_fx:
+                totals_sgd += row_sgd
+                expense_cells.append(fmt(row_sgd))
+            out.append(" | ".join(expense_cells) + " |")
         if use_fx and totals_sgd:
-            assert fx_rates is not None  # guaranteed by use_fx
-            out.append(f"| **Total Expense (SGD)** | | **{fmt(totals_sgd)}** |")
+            total_parts = ["| **Total Expense**"]
+            for _ in expense_ccies:
+                total_parts.append("")
+            total_parts.append(f"**{fmt(totals_sgd)}**")
+            out.append(" | ".join(total_parts) + " |")
         elif not use_fx:
             out.append(f"| **Total Expense (per currency above)** | | |")
         out.append("")
