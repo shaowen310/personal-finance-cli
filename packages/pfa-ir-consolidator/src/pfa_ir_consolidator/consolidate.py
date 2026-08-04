@@ -259,6 +259,61 @@ def consolidate_statements(
     return consolidated, total_txns_in, deduped, filtered
 
 
+def finalize_consolidated_ir(
+    consolidated: Any,
+    as_of: str | None = None,
+) -> Any:
+    """Embed an FX rate block into a consolidated ``ParsedStatement``.
+
+    The analysis package reads FX rates from ``extras.consolidation.fx`` via
+    ``pfa_analysis.analyze._extract_consolidated_fx``. Without this step the
+    consolidated IR carries no FX block, so downstream SGD conversions silently
+    degrade. We fetch SGD-per-unit rates (falling back to the embedded default)
+    and store them in the canonical shape:
+
+        extras.consolidation.fx = {
+            "rates_sgd_per_unit": {CCY: SGD per 1 unit, ...},
+            "as_of": "YYYY-MM-DD",
+            "source": "frankfurter ...",
+        }
+
+    ``as_of`` defaults to the consolidated statement's period end (``period_to``)
+    then period start (``period_from``). The FX block is attached in place and
+    the (mutated) statement is returned so the caller can persist it.
+    """
+    if as_of is None:
+        meta = consolidated.statement_meta
+        as_of = meta.period_to or meta.period_from or None
+
+    rates_sgd_per_unit: dict[str, float] = {}
+    source = "pfa_fx default"
+    try:
+        from pfa_fx.wrapper import fetch_fx_rates
+
+        fx = fetch_fx_rates(as_of)
+        if fx and fx.get("rates"):
+            # The wrapper rates are SGD-per-unit already; strip the base (SGD=1.0)
+            # so the embedded block only carries non-trivial foreign rates.
+            rates_sgd_per_unit = {
+                k: float(v) for k, v in fx["rates"].items() if k != "SGD"
+            }
+            source = fx.get("source", source)
+            as_of = as_of or fx.get("date", "")
+    except Exception as e:  # noqa: BLE001 - never block consolidation on FX failure
+        print(f"[WARN] finalize_consolidated_ir: FX fetch failed: {e}", file=sys.stderr)
+
+    extras = dict(consolidated.extras or {})
+    consolid = dict(extras.get("consolidation") or {})
+    consolid["fx"] = {
+        "rates_sgd_per_unit": rates_sgd_per_unit,
+        "as_of": as_of or "",
+        "source": source,
+    }
+    extras["consolidation"] = consolid
+    consolidated.extras = extras
+    return consolidated
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Consolidate IR JSON files.")
     _ = ap.add_argument("inputs", nargs="+", help="Input *.ir.json files")

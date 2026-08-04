@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .defaults import BASE_CCY
+from .defaults import BASE_CCY, DEFAULT_WATCH_SYMBOLS
 from .rates import FXResult, get_fx_rates
 
 
@@ -33,7 +33,8 @@ def fetch_fx_rates(
 
     With an empty *currencies* list, all available currencies are fetched.
     """
-    result = get_fx_rates(currencies or [], as_of=date_str)
+    requested = currencies if currencies is not None else DEFAULT_WATCH_SYMBOLS
+    result = get_fx_rates(requested, as_of=date_str)
     return fx_result_to_wrapper(result)
 
 

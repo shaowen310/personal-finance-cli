@@ -1,16 +1,20 @@
 """Markdown report renderer for personal-finance-analysis.
 
-Produces a six-section Markdown report from the structured analysis result
-dict returned by ``analyze.analyze_file()``.
+Produces a Markdown report from the structured analysis result dict returned by
+``analyze.analyze_file()``.
 
-Also houses shared utilities (``convert_to_sgd``, ``FX_BASE``) used by both
+Also houses shared FX utilities (``convert_to_sgd``, ``FX_BASE``) used by both
 the renderer and the main analyzer script.
+
+The renderer is fully self-contained (no dependency on the external
+``personal-finance-analysis`` skill). FX rates are expected in the canonical
+SGD-per-unit shape ``{"rates": {CCY: SGD per 1 unit}, "date": ..., "source": ...}``.
 """
 from __future__ import annotations
 
+from collections import defaultdict
 from datetime import datetime
 from typing import Any
-from collections import defaultdict
 
 from pfa_fx import BASE_CCY, convert_to_sgd as _pfa_convert_to_sgd
 
@@ -54,9 +58,9 @@ def render_report(result: dict[str, Any], consolidated: bool = False,
         result: Dict from ``analyze.analyze_file()`` with keys
             ``meta``, ``metrics_by_ccy``, ``assets``, ``source``.
         consolidated: If True, use consolidated report title & layout.
-        fx_rates: FX rate dict from ``analyze.fetch_fx_rates()``, or None.
+        fx_rates: FX rate dict in the canonical SGD-per-unit shape
+            ``{"rates": {CCY: SGD per 1 unit}, "date": ..., "source": ...}``.
     """
-
     meta = result["meta"]
     mbc = result["metrics_by_ccy"]
     assets = result["assets"]
@@ -119,6 +123,7 @@ def render_report(result: dict[str, Any], consolidated: bool = False,
     liabilities = assets.get("liabilities", {})
     out.append("## 2. Balance Sheet\n")
     if use_fx:
+        assert fx_rates is not None  # guaranteed by use_fx
         out.append("| Currency | Cash | Time Deposits | Investments | Liabilities | Net Position | SGD Equivalent |")
         out.append("|---|---:|---:|---:|---:|---:|---:|")
     else:
@@ -137,16 +142,17 @@ def render_report(result: dict[str, Any], consolidated: bool = False,
         iv = assets["investments"].get(c, 0.0)
         lia = liabilities.get(c, 0.0)
         np_ = csh + td + iv - lia
-        tot_cash += csh; tot_td += td; tot_inv += iv; tot_lia += lia; tot_np += np_  # noqa: E702
+        tot_cash += csh; tot_td += td; tot_inv += iv; tot_lia += lia; tot_np += np_
         if use_fx:
+            assert fx_rates is not None  # guaranteed by use_fx
             sgd_csh = convert_to_sgd(csh, c, fx_rates) or 0.0
             sgd_td = convert_to_sgd(td, c, fx_rates) or 0.0
             sgd_iv = convert_to_sgd(iv, c, fx_rates) or 0.0
             sgd_lia = convert_to_sgd(lia, c, fx_rates) or 0.0
             sgd_np = sgd_csh + sgd_td + sgd_iv - sgd_lia
-            tot_cash_sgd += sgd_csh; tot_td_sgd += sgd_td  # noqa: E702
-            tot_inv_sgd += sgd_iv; tot_lia_sgd += sgd_lia  # noqa: E702
-            tot_np_sgd += sgd_np  # noqa: E702
+            tot_cash_sgd += sgd_csh; tot_td_sgd += sgd_td
+            tot_inv_sgd += sgd_iv; tot_lia_sgd += sgd_lia
+            tot_np_sgd += sgd_np
             tot_sgd += sgd_np
             out.append(f"| {c} | {fmt(csh)} | {fmt(td)} | {fmt(iv)} | {fmt(lia)} | {fmt(np_)} | {fmt(sgd_np)} |")
         else:
@@ -170,7 +176,6 @@ def render_report(result: dict[str, Any], consolidated: bool = False,
     if drilldown:
         out.append("## 2.1 Balance Sheet Drill-Down\n")
         out.append("Account-level derivation of every figure in the Balance Sheet above, grouped first by currency then by bucket (Cash / Time Deposit / Investment / Liability). Accounts that contribute nothing are listed under Dropped as data-quality flags. SGD Equivalent uses the same FX rate as section 2.\n")
-        # Aggregate raw rows (sum across files, collapse duplicate account lines).
         agg: dict[tuple[str, str, str, str, str], tuple[float, str]] = {}
         for r in drilldown:
             key = (r["currency"], r["bucket"], r.get("institution", ""),
@@ -178,7 +183,6 @@ def render_report(result: dict[str, Any], consolidated: bool = False,
             cur, deriv = agg.get(key, (0.0, r["derivation"]))
             agg[key] = (cur + (r.get("native_value") or 0.0), deriv)
 
-        # Order currencies by SGD-equivalent total (descending).
         ccy_sgd: dict[str, float] = defaultdict(float)
         for (ccy, _b, _i, _a, _t), (val, _d) in agg.items():
             se = convert_to_sgd(val, ccy, fx_rates)
@@ -188,7 +192,11 @@ def render_report(result: dict[str, Any], consolidated: bool = False,
 
         BUCKET_ORDER = ["Cash", "Time Deposit", "Investment", "Liability", "Dropped"]
         for ccy in used_ccies:
-            rate_sgd = fx_rates["rates"].get(ccy) if (fx_rates and ccy != FX_BASE) else None
+            rate_sgd = (
+                fx_rates.get("rates", {}).get(ccy)
+                if (fx_rates and ccy != FX_BASE)
+                else None
+            )
             rate_disp = f"1 {ccy} = {rate_sgd:.4f} SGD" if rate_sgd is not None else "base currency (1 SGD = 1 SGD)"
             out.append(f"### {ccy}  ")
             out.append(f"_FX: {rate_disp}_\n")
@@ -246,7 +254,6 @@ def render_report(result: dict[str, Any], consolidated: bool = False,
             for ccy in sorted(by_ccy):
                 amt = by_ccy[ccy]
                 out.append(f"| {source} | {ccy} | {fmt(amt)} |")
-            # If multi-currency and FX available, show SGD equivalent line.
             if use_fx and by_ccy:
                 assert fx_rates is not None  # guaranteed by use_fx
                 sgd_total = 0.0
@@ -255,18 +262,16 @@ def render_report(result: dict[str, Any], consolidated: bool = False,
                     if conv is not None:
                         sgd_total += conv
                 tot_sgd += sgd_total
-                source_label = f"{source} (SGD eq.)"
-                out.append(f"| *{source_label}* | *SGD* | *{fmt(sgd_total)}* |")
+                out.append(f"| *{source} (SGD eq.)* | *SGD* | *{fmt(sgd_total)}* |")
             else:
                 for ccy, amt in by_ccy.items():
-                    tot_sgd += amt  # raw sum (single-currency or no FX)
+                    tot_sgd += amt
         if use_fx and tot_sgd:
             out.append(f"| **Total Income (SGD)** | | **{fmt(tot_sgd)}** |")
         elif not use_fx:
             out.append(f"| **Total Income (per currency above)** | | |")
         out.append("")
 
-        # ---- Per-source transaction drill-down ------------------------------
         for entry in income_drilldown:
             txns: list[dict[str, Any]] = entry.get("transactions", [])
             if not txns:
@@ -277,11 +282,10 @@ def render_report(result: dict[str, Any], consolidated: bool = False,
             out.append("|---|---|---|---|---|---:|")
             for t in txns:
                 desc = t["description"].strip().replace("|", "\\|")
-                cur = t.get("currency", "")
-                bank = t.get("bank", "")
-                acct = t.get("account", "")
-                acct_type = t.get("account_type", "")
-                out.append(f"| {t['date']} | {bank} | {acct} | {acct_type} | {desc} | {fmt(t['amount'])} {cur} |")
+                out.append(
+                    f"| {t['date']} | {t.get('bank', '')} | {t.get('account', '')} | "+
+                    f"{t.get('account_type', '')} | {desc} | {fmt(t['amount'])} {t.get('currency', '')} |"
+                )
             out.append("")
 
     # ---- Expense Breakdown ---------------------------------------------------
@@ -293,13 +297,11 @@ def render_report(result: dict[str, Any], consolidated: bool = False,
         for entry in expense_drilldown:
             cat = entry["category"]
             by_ccy = entry["by_currency"]
-            # Category row: one line per currency
             for ccy in sorted(by_ccy):
                 amt = by_ccy[ccy]
                 out.append(f"| {cat} | {ccy} | {fmt(abs(amt))} |")
-            # SGD equivalent row if FX available
             if use_fx and by_ccy:
-                assert fx_rates is not None
+                assert fx_rates is not None  # guaranteed by use_fx
                 sgd_total = 0.0
                 for ccy, amt in by_ccy.items():
                     conv = convert_to_sgd(amt, ccy, fx_rates)
@@ -311,12 +313,12 @@ def render_report(result: dict[str, Any], consolidated: bool = False,
                 for ccy, amt in by_ccy.items():
                     totals_sgd += abs(amt)
         if use_fx and totals_sgd:
+            assert fx_rates is not None  # guaranteed by use_fx
             out.append(f"| **Total Expense (SGD)** | | **{fmt(totals_sgd)}** |")
         elif not use_fx:
             out.append(f"| **Total Expense (per currency above)** | | |")
         out.append("")
 
-        # ---- Per-category transaction drill-down ---------------------------
         for entry in expense_drilldown:
             txns = entry.get("transactions", [])
             if not txns:
@@ -327,11 +329,10 @@ def render_report(result: dict[str, Any], consolidated: bool = False,
             out.append("|---|---|---|---|---|---:|")
             for t in txns:
                 desc = t["description"].strip().replace("|", "\\|")
-                cur = t.get("currency", "")
-                bank = t.get("bank", "")
-                acct = t.get("account", "")
-                acct_type = t.get("account_type", "")
-                out.append(f"| {t['date']} | {bank} | {acct} | {acct_type} | {desc} | {fmt(t['amount'])} {cur} |")
+                out.append(
+                    f"| {t['date']} | {t.get('bank', '')} | {t.get('account', '')} | "+
+                    f"{t.get('account_type', '')} | {desc} | {fmt(t['amount'])} {t.get('currency', '')} |"
+                )
             out.append("")
 
     # ---- 4. Key Observations -------------------------------------------------

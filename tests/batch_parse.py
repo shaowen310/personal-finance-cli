@@ -125,6 +125,11 @@ def _step2_consolidate() -> Path | None:
         from pfa_parser.postprocess import verify_txn_links
         consolidated = verify_txn_links(consolidated)
 
+        # Embed FX rates into extras.consolidation.fx so downstream analysis /
+        # rendering can convert foreign balances to SGD.
+        from pfa_ir_consolidator.consolidate import finalize_consolidated_ir
+        consolidated = finalize_consolidated_ir(consolidated)
+
         out_path = OUTPUT_DIR / "consolidated.ir.json"
         _ = out_path.write_text(consolidated.to_json(indent=2), encoding="utf-8")
 
@@ -203,35 +208,12 @@ def _step4_render_report(consolidated_path: Path) -> None:
     # ── 4b. Balance Sheet & Cash Flow Report ───────────────────────────────
     print("  4b. Balance sheet & cash flow report …", end=" ", flush=True)
     try:
-        from pfa_analysis.analyze import (
-            analyze_statement,
-            build_assets,
-            build_balance_sheet_drilldown,
-            load_statement,
-        )
-        from pfa_analysis.render_md import render_report
+        from pfa_analysis.analyze import render_consolidated_report
 
-        raw = json.loads(consolidated_path.read_text(encoding="utf-8"))
-        meta, txns = load_statement(consolidated_path)
-        result_dict = analyze_statement(raw, meta, txns, consolidated_path)
-        result_dict["assets"] = build_assets(meta, result_dict["metrics_by_ccy"])
-        result_dict["drilldown"] = build_balance_sheet_drilldown(raw)
-        result_dict["meta"]["_consolidated"] = meta.get("_consolidated", False)
-
-        md = render_report(
-            result_dict,
-            consolidated=result_dict["meta"].get("_consolidated", False),
-            drilldown=result_dict.get("drilldown"),
-        )
+        md = render_consolidated_report(consolidated_path, categories_path)
         out_path = OUTPUT_DIR / "finance_report.md"
         _ = out_path.write_text(md, encoding="utf-8")
-        np_ = (
-            sum(result_dict["assets"]["cash"].values())
-            + sum(result_dict["assets"]["time_deposits"].values())
-            + sum(result_dict["assets"]["investments"].values())
-        )
-        currencies = sorted(result_dict["metrics_by_ccy"])
-        print(f"OK  net_position={np_:,.2f} currencies={currencies} → {out_path.name}")
+        print(f"OK → {out_path.name}")
     except Exception:
         print("FAILED")
         traceback.print_exc()

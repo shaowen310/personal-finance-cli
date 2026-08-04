@@ -676,6 +676,45 @@ def process_one_file(path: Path, out_dir: Path) -> dict[str, Any]:
     return result
 
 
+def render_consolidated_report(
+    consolidated_path: Path,
+    categories_path: str | Path | None = None,
+) -> str:
+    """Analyse a consolidated IR and return the Markdown report string.
+
+    This is the canonical entry point for producing a ``_Finance_Report.md``
+    from a consolidated ``.ir.json`` file. It wraps the full pipeline:
+    ``_analyze_file`` → FX extraction → income/expense drilldowns →
+    ``render_report``.
+
+    Callers (the CLI ``main``, batch test drivers) should use this instead of
+    re-implementing the assembly logic.
+    """
+    result = _analyze_file(consolidated_path)
+    raw = json.loads(consolidated_path.read_text(encoding="utf-8"))
+    fx_rates = _extract_consolidated_fx(raw)
+    # Fallback: a consolidated IR may not embed FX rates. Fetch the period-end
+    # rate so SGD conversion still works for the consolidated report.
+    if fx_rates is None and result["meta"].get("_consolidated"):
+        period_end = parse_date_to_iso(result["meta"].get("period_end"))
+        if period_end:
+            fx_rates = fetch_fx_rates(period_end)
+    if fx_rates:
+        print(f"FX rates: {fx_rates['date']} from {fx_rates['source']}")
+
+    cat_path = Path(categories_path) if categories_path else consolidated_path.with_name("categories.json")
+    income_drill, expense_drill = build_income_expense_drilldowns(consolidated_path, cat_path)
+
+    return render_report(
+        result,
+        consolidated=result["meta"].get("_consolidated", False),
+        fx_rates=fx_rates,
+        drilldown=result.get("drilldown"),
+        income_drilldown=income_drill if income_drill else None,
+        expense_drilldown=expense_drill if expense_drill else None,
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description="Analyse personal balance sheet & cash flow from bank-statement JSON.")
     _ = p.add_argument("input", nargs="?", help="Input IR JSON file (single statement or consolidated)")
@@ -727,88 +766,93 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     # Standard Markdown mode (single file, which may be a consolidated IR).
-    result = _analyze_file(in_path)
-    raw = json.loads(in_path.read_text(encoding="utf-8"))
-    fx_rates = _extract_consolidated_fx(raw)
-    # Fallback: a consolidated IR may not embed FX rates. Fetch the period-end
-    # rate so SGD conversion still works for the consolidated report.
-    if fx_rates is None and result["meta"].get("_consolidated"):
-        period_end = parse_date_to_iso(result["meta"].get("period_end"))
-        if period_end:
-            fx_rates = fetch_fx_rates(period_end)
-    if fx_rates:
-        print(f"FX rates: {fx_rates['date']} from {fx_rates['source']}")
+    text = render_consolidated_report(in_path, categories_path=args.categories)
+    out_path = out_dir / (in_path.stem + "_Finance_Report.md")
+    _ = out_path.write_text(text, encoding="utf-8")
+    print(f"Written: {out_path}")
+    return 0
 
-    # Income drill-down: classify every inflow transaction by source keyword.
+
+def build_income_expense_drilldowns(
+    consolidated_path: Path,
+    categories_path: Path,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Build income/expense drilldowns for the consolidated report.
+
+    Classifies every non-transfer inflow by income source and every outflow by
+    category (from ``categories.json``), grouped per currency. Returns
+    ``(income_drilldown, expense_drilldown)`` in the shape the report renderer
+    expects. Safe to call on any consolidated IR path.
+
+    This is the canonical implementation of the logic duplicated historically in
+    the ``batch_parse`` test driver; callers (CLI ``main``, scripts) should use
+    this instead of re-implementing it.
+    """
     income_drill: list[dict[str, Any]] = []
-    _, ir_rows = _load_ir_with_txn_id(in_path)
+    expense_drill: list[dict[str, Any]] = []
+    try:
+        _, ir_rows = _load_ir_with_txn_id(consolidated_path)
+    except Exception:
+        return income_drill, expense_drill
+
     src_ccy: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
     src_txns: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    exp_ccy: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
+    exp_txns: dict[str, list[dict[str, Any]]] = defaultdict(list)
+
+    categories: dict[str, str] = {}
+    if Path(categories_path).exists():
+        try:
+            categories = json.loads(Path(categories_path).read_text(encoding="utf-8"))
+        except Exception:
+            categories = {}
+
     for row in ir_rows:
         if row.get("is_internal_transfer"):
             continue
-        if classify_cash_flow(row) != "Income":
-            continue
-        src = _classify_income_source(row["description"])
-        src_ccy[src][row["currency"]] += abs(float(row["amount"]))
-        src_txns[src].append({
-            "date": str(row.get("date", "")),
-            "description": str(row.get("description", "")),
-            "amount": abs(float(row["amount"])),
-            "currency": str(row.get("currency", "")),
-            "bank": str(row.get("bank", "")),
-            "account": str(row.get("account", "")),
-            "account_type": str(row.get("account_type", "")),
-        })
+        flow = classify_cash_flow(row)
+        if flow == "Income":
+            src = _classify_income_source(row["description"])
+            src_ccy[src][row["currency"]] += abs(float(row["amount"]))
+            src_txns[src].append({
+                "date": str(row.get("date", "")),
+                "description": str(row.get("description", "")),
+                "amount": abs(float(row["amount"])),
+                "currency": str(row.get("currency", "")),
+                "bank": str(row.get("bank", "")),
+                "account": str(row.get("account", "")),
+                "account_type": str(row.get("account_type", "")),
+            })
+        elif flow == "Expense":
+            txn_id = row.get("txn_id", "")
+            cat = categories.get(txn_id, "Uncategorized")
+            cat_parts = cat.split(": ", 1)
+            cat_disp = cat_parts[1] if len(cat_parts) == 2 else cat
+            exp_ccy[cat_disp][row["currency"]] += float(row["amount"])
+            exp_txns[cat_disp].append({
+                "date": str(row.get("date", "")),
+                "description": str(row.get("description", "")),
+                "amount": abs(float(row["amount"])),
+                "currency": str(row.get("currency", "")),
+                "bank": str(row.get("bank", "")),
+                "account": str(row.get("account", "")),
+                "account_type": str(row.get("account_type", "")),
+            })
+
     for src in sorted(src_ccy, key=lambda s: -sum(src_ccy[s].values())):
         income_drill.append({
             "source": src,
             "by_currency": dict(src_ccy[src]),
             "transactions": sorted(src_txns[src], key=lambda t: -t["amount"]),
         })
+    for cat in sorted(exp_ccy, key=lambda c: -sum(abs(v) for v in exp_ccy[c].values())):
+        expense_drill.append({
+            "category": cat,
+            "by_currency": dict(exp_ccy[cat]),
+            "transactions": sorted(exp_txns[cat], key=lambda t: -t["amount"]),
+        })
 
-    # Expense drill-down: classify every outflow by category (from categories.json).
-    expense_drill: list[dict[str, Any]] = []
-    if args.categories:
-        categories_path = Path(args.categories)
-        if categories_path.exists():
-            categories = json.loads(categories_path.read_text(encoding="utf-8"))
-            exp_ccy: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
-            exp_txns: dict[str, list[dict[str, Any]]] = defaultdict(list)
-            for row in ir_rows:
-                if row.get("is_internal_transfer"):
-                    continue
-                if classify_cash_flow(row) != "Expense":
-                    continue
-                txn_id = row.get("txn_id", "")
-                cat = categories.get(txn_id, "Uncategorized")
-                cat_parts = cat.split(": ", 1)
-                cat_disp = cat_parts[1] if len(cat_parts) == 2 else cat
-                exp_ccy[cat_disp][row["currency"]] += float(row["amount"])
-                exp_txns[cat_disp].append({
-                    "date": str(row.get("date", "")),
-                    "description": str(row.get("description", "")),
-                    "amount": abs(float(row["amount"])),
-                    "currency": str(row.get("currency", "")),
-                    "bank": str(row.get("bank", "")),
-                    "account": str(row.get("account", "")),
-                    "account_type": str(row.get("account_type", "")),
-                })
-            for cat in sorted(exp_ccy, key=lambda c: -sum(abs(v) for v in exp_ccy[c].values())):
-                expense_drill.append({
-                    "category": cat,
-                    "by_currency": dict(exp_ccy[cat]),
-                    "transactions": sorted(exp_txns[cat], key=lambda t: -t["amount"]),
-                })
-
-    text = render_report(result, consolidated=result["meta"].get("_consolidated", False),
-                         fx_rates=fx_rates, drilldown=result.get("drilldown"),
-                         income_drilldown=income_drill if income_drill else None,
-                         expense_drilldown=expense_drill if expense_drill else None)
-    out_path = out_dir / (in_path.stem + "_Finance_Report.md")
-    _ = out_path.write_text(text, encoding="utf-8")
-    print(f"Written: {out_path}")
-    return 0
+    return income_drill, expense_drill
 
 
 def _split_default(txns: list[Txn], meta: dict[str, Any]) -> dict[str, dict[str, Any]]:
