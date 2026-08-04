@@ -986,7 +986,7 @@ def build_income_expense_drilldowns(
             # classification to assign to income or expense.
             flow = classify_cash_flow(row)
             if flow == "Income":
-                src = cat_full or "Income"
+                src = cat_sub or cat_full or "Income"
                 src_ccy[src][row["currency"]] += abs(float(row["amount"]))
                 src_txns[src].append({
                     "date": str(row.get("date", "")),
@@ -998,7 +998,7 @@ def build_income_expense_drilldowns(
                     "account_type": str(row.get("account_type", "")),
                 })
             elif flow == "Expense":
-                cat_disp = cat_full or "Uncategorized"
+                cat_disp = cat_sub or cat_full or "Uncategorized"
                 exp_ccy[cat_disp][row["currency"]] += float(row["amount"])
                 exp_txns[cat_disp].append({
                     "date": str(row.get("date", "")),
@@ -1150,15 +1150,14 @@ def _classify_discretionary(category: str) -> bool:
 
 
 def _split_cat(cat: str) -> tuple[str, str]:
-    """Split a ``"Class: Subtype"`` category string into ``(cls, sub)``.
-
-    Handles two-level strings from txn-categorize and legacy flat strings
-    for backward compatibility.
-    """
-    parts = cat.split(": ", 1)
-    if len(parts) == 2:
-        return (parts[0], parts[1])
-    return ("", cat)
+    """Split a ``"Class:Subtype"`` or ``"Class: Subtype"`` string into ``(cls, sub)``."""
+    if ": " in cat:
+        parts = cat.split(": ", 1)
+    elif ":" in cat:
+        parts = cat.split(":", 1)
+    else:
+        return ("", cat)
+    return (parts[0], parts[1])
 
 
 def _build_meta(data: dict[str, Any], path: Path) -> dict[str, Any]:
