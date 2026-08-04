@@ -130,16 +130,22 @@ def _is_consolidated(data: dict[str, Any]) -> bool:
     return "consolidate" in name
 
 
-def load_statement(path: Path) -> tuple[dict[str, Any], list[Txn]]:
+def load_statement(path: Path,
+                   start_date: str | None = None,
+                   end_date: str | None = None) -> tuple[dict[str, Any], list[Txn]]:
     """Load a JSON statement and return (meta, normalized transactions).
 
     Auto-detects the consolidated `.ir.json` (parser name contains
     ``consolidate``), the single statement `.ir.json` parser output, or the
     default schema.
+
+    When *start_date* and/or *end_date* are provided, transactions are
+    filtered to the inclusive date range (applies to consolidated IR only;
+    non-consolidated formats are not filtered).
     """
     data = json.loads(path.read_text(encoding="utf-8"))
     if _is_consolidated(data):
-        return _load_consolidated_ir(data, path)
+        return _load_consolidated_ir(data, path, start_date, end_date)
     if "statement_meta" in data:
         return _load_ir(data)
     return _load_default(data)
@@ -165,8 +171,14 @@ def _is_self_reference(description: str, own_digits: set[str]) -> bool:
     return any(no and no in desc for no in own_digits)
 
 
-def _load_consolidated_ir(data: dict[str, Any], path: Path) -> tuple[dict[str, Any], list[Txn]]:
-    """Load a consolidated IR: flatten transactions across all accounts."""
+def _load_consolidated_ir(data: dict[str, Any], path: Path,
+                          start_date: str | None = None,
+                          end_date: str | None = None) -> tuple[dict[str, Any], list[Txn]]:
+    """Load a consolidated IR: flatten transactions across all accounts.
+
+    When *start_date* and/or *end_date* are provided, only transactions whose
+    ``posted_date`` falls within the inclusive range are included.
+    """
     meta = _build_meta(data, path)
     own_digits = _own_account_digits(data.get("accounts", []))
     txns: list[Txn] = []
@@ -174,6 +186,15 @@ def _load_consolidated_ir(data: dict[str, Any], path: Path) -> tuple[dict[str, A
         acct_ccy = acct.get("currency", "")
         acct_type = acct.get("account_type", "")
         for t in acct.get("transactions", []):
+            # Apply date filter early to skip unwanted transactions
+            if start_date or end_date:
+                posted = str(t.get("posted_date", "")).strip()
+                if not posted:
+                    continue
+                if start_date and posted < start_date:
+                    continue
+                if end_date and posted > end_date:
+                    continue
             desc = str(t.get("description", "")).strip()
             is_internal = bool(t.get("is_internal_transfer", False)) or _is_self_reference(desc, own_digits)
             txns.append({
@@ -348,12 +369,20 @@ def fetch_fx_rates(date_str: str) -> dict[str, Any] | None:
 
 def compute_metrics(txns: list[Txn], meta: dict[str, Any], ccy: str,
                     opening_override: float | None = None,
-                    closing_override: float | None = None) -> dict[str, Any]:
+                    closing_override: float | None = None,
+                    use_txn_balances: bool = False) -> dict[str, Any]:
     """Compute balance-sheet + cash-flow metrics for one currency in a statement.
 
     When ``opening_override``/``closing_override`` are supplied (e.g. derived
     from a consolidated ``accounts[].opening_balance``), they are used directly
     instead of inferring from ``meta`` or the first/last ``balance_after``.
+
+    When ``use_txn_balances`` is True, overrides and statement-meta balances
+    are ignored and opening/closing are always derived from the filtered
+    transaction stream's ``balance_after``. This is the correct mode when
+    transactions have been filtered by ``start_date``/``end_date``, because
+    the statement-level balances reflect the full period rather than the
+    truncated window.
     """
     income = expense = transfer_in = transfer_out = 0.0
     for t in txns:
@@ -375,7 +404,12 @@ def compute_metrics(txns: list[Txn], meta: dict[str, Any], ccy: str,
     savings_rate = net_operating / income if income > 0 else 0.0
 
     # Opening / closing for this currency.
-    if opening_override is not None and closing_override is not None:
+    if use_txn_balances and txns:
+        # Derive from the filtered transaction stream so that
+        # opening/closing reflect the truncated date window.
+        opening = (txns[0]["balance_after"] or 0.0) - txns[0]["amount"]
+        closing = txns[-1]["balance_after"] or 0.0
+    elif opening_override is not None and closing_override is not None:
         opening = opening_override
         closing = closing_override
     elif meta.get("currency") == ccy and meta.get("opening") is not None:
@@ -536,22 +570,38 @@ def build_balance_sheet_drilldown(raw: dict[str, Any]) -> list[dict[str, Any]]:
     return rows
 
 
-def _analyze_file(path: Path) -> dict[str, Any]:
+def _analyze_file(path: Path,
+                  start_date: str | None = None,
+                  end_date: str | None = None) -> dict[str, Any]:
     """Analyze one statement file into a structured result.
 
     Dispatches to the consolidated analysis path (account-balance based) when
     the IR is consolidated, or the per-file analysis path otherwise.
+
+    When *start_date* or *end_date* is provided, opening/closing balances are
+    derived from the filtered transaction stream (``balance_after``) rather
+    than from the full-period statement/account balances, ensuring Cash Flow
+    reconciliation holds for the truncated window.
     """
     raw = json.loads(Path(path).read_text(encoding="utf-8"))
-    meta, txns = load_statement(path)
+    meta, txns = load_statement(path, start_date, end_date)
+    use_txn_balances = bool(start_date or end_date)
     if meta.get("_consolidated"):
-        return _analyze_consolidated(raw, meta, txns, path)
-    return analyze_statement(raw, meta, txns, path)
+        return _analyze_consolidated(raw, meta, txns, path,
+                                     use_txn_balances=use_txn_balances)
+    return analyze_statement(raw, meta, txns, path,
+                             use_txn_balances=use_txn_balances)
 
 
 def _analyze_consolidated(raw: dict[str, Any], meta: dict[str, Any],
-                          txns: list[Txn], path: Path) -> dict[str, Any]:
-    """Consolidated IR: opening/closing come from account balances, not txns."""
+                          txns: list[Txn], path: Path,
+                          use_txn_balances: bool = False) -> dict[str, Any]:
+    """Consolidated IR: opening/closing come from account balances, not txns.
+
+    When ``use_txn_balances`` is True (e.g. transactions have been filtered by
+    ``start_date``/``end_date``), account-summary balances are ignored and
+    opening/closing are derived from the filtered transaction stream instead.
+    """
     by_ccy: dict[str, list[Txn]] = defaultdict(list)
     for t in txns:
         by_ccy[t["currency"]].append(t)
@@ -559,20 +609,22 @@ def _analyze_consolidated(raw: dict[str, Any], meta: dict[str, Any],
         lst.sort(key=lambda x: x["date"])
 
     # Opening/closing per currency from account balances (cash + credit-card
-    # accounts) — authoritative for a consolidated IR, so we don't infer from
-    # transaction balance_after.
+    # accounts) — authoritative for a consolidated IR when the full statement
+    # period is analysed. When the date range is truncated we derive
+    # opening/closing from the filtered transaction stream instead.
     opening_by_ccy: dict[str, float] = {}
     closing_by_ccy: dict[str, float] = {}
-    for a in meta["account_summary"]:
-        atype = str(a.get("account_type", "")).lower()
-        if atype in ("fixed", "time", "securities", "investment"):
-            continue
-        ccy = a.get("currency", "")
-        op = parse_num(a.get("opening_balance"))
-        cl = parse_num(a.get("closing_balance"))
-        if ccy:
-            opening_by_ccy[ccy] = opening_by_ccy.get(ccy, 0.0) + (op or 0.0)
-            closing_by_ccy[ccy] = closing_by_ccy.get(ccy, 0.0) + (cl or 0.0)
+    if not use_txn_balances:
+        for a in meta["account_summary"]:
+            atype = str(a.get("account_type", "")).lower()
+            if atype in ("fixed", "time", "securities", "investment"):
+                continue
+            ccy = a.get("currency", "")
+            op = parse_num(a.get("opening_balance"))
+            cl = parse_num(a.get("closing_balance"))
+            if ccy:
+                opening_by_ccy[ccy] = opening_by_ccy.get(ccy, 0.0) + (op or 0.0)
+                closing_by_ccy[ccy] = closing_by_ccy.get(ccy, 0.0) + (cl or 0.0)
 
     metrics_by_ccy: dict[str, dict[str, Any]] = {}
     for ccy, lst in by_ccy.items():
@@ -582,6 +634,7 @@ def _analyze_consolidated(raw: dict[str, Any], meta: dict[str, Any],
             lst, meta, ccy,
             opening_override=op if (op is not None and cl is not None) else None,
             closing_override=cl if (op is not None and cl is not None) else None,
+            use_txn_balances=use_txn_balances,
         )
 
     assets = build_assets(meta, metrics_by_ccy)
@@ -593,8 +646,14 @@ def _analyze_consolidated(raw: dict[str, Any], meta: dict[str, Any],
 
 
 def analyze_statement(raw: dict[str, Any], meta: dict[str, Any],
-                      txns: list[Txn], path: Path) -> dict[str, Any]:
-    """Per-file IR: metrics inferred from statement_meta / transaction flow."""
+                      txns: list[Txn], path: Path,
+                      use_txn_balances: bool = False) -> dict[str, Any]:
+    """Per-file IR: metrics inferred from statement_meta / transaction flow.
+
+    When ``use_txn_balances`` is True (e.g. transactions have been filtered by
+    ``start_date``/``end_date``), statement-meta balances are ignored and
+    opening/closing are derived from the filtered transaction stream instead.
+    """
     by_ccy: dict[str, list[Txn]] = defaultdict(list)
     for t in txns:
         by_ccy[t["currency"]].append(t)
@@ -603,7 +662,8 @@ def analyze_statement(raw: dict[str, Any], meta: dict[str, Any],
 
     metrics_by_ccy: dict[str, dict[str, Any]] = {}
     for ccy, lst in by_ccy.items():
-        metrics_by_ccy[ccy] = compute_metrics(lst, meta, ccy)
+        metrics_by_ccy[ccy] = compute_metrics(lst, meta, ccy,
+                                              use_txn_balances=use_txn_balances)
 
     assets = build_assets(meta, metrics_by_ccy)
     drilldown = build_balance_sheet_drilldown(raw)
@@ -679,6 +739,8 @@ def process_one_file(path: Path, out_dir: Path) -> dict[str, Any]:
 def render_consolidated_report(
     consolidated_path: Path,
     categories_path: str | Path | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
 ) -> str:
     """Analyse a consolidated IR and return the Markdown report string.
 
@@ -687,10 +749,14 @@ def render_consolidated_report(
     ``_analyze_file`` → FX extraction → income/expense drilldowns →
     ``render_report``.
 
+    When *start_date* and/or *end_date* are provided (ISO 8601 ``YYYY-MM-DD``),
+    only transactions whose ``posted_date`` falls within the inclusive range
+    are analysed.
+
     Callers (the CLI ``main``, batch test drivers) should use this instead of
     re-implementing the assembly logic.
     """
-    result = _analyze_file(consolidated_path)
+    result = _analyze_file(consolidated_path, start_date, end_date)
     raw = json.loads(consolidated_path.read_text(encoding="utf-8"))
     fx_rates = _extract_consolidated_fx(raw)
     # Fallback: a consolidated IR may not embed FX rates. Fetch the period-end
@@ -703,7 +769,9 @@ def render_consolidated_report(
         print(f"FX rates: {fx_rates['date']} from {fx_rates['source']}")
 
     cat_path = Path(categories_path) if categories_path else consolidated_path.with_name("categories.json")
-    income_drill, expense_drill = build_income_expense_drilldowns(consolidated_path, cat_path)
+    income_drill, expense_drill = build_income_expense_drilldowns(
+        consolidated_path, cat_path, start_date, end_date,
+    )
 
     return render_report(
         result,
@@ -724,6 +792,10 @@ def main(argv: list[str] | None = None) -> int:
                        help="Output dashboard_data.json instead of Markdown")
     _ = p.add_argument("--categories", help="Path to categories.json from txn-categorize")
     _ = p.add_argument("--cost-basis", help="Path to cost_basis.json for unrealized P&L (for --dashboard-json)")
+    _ = p.add_argument("--start-date", metavar="YYYY-MM-DD",
+                       help="Only include transactions on or after this date (inclusive)")
+    _ = p.add_argument("--end-date", metavar="YYYY-MM-DD",
+                       help="Only include transactions on or before this date (inclusive)")
     args = p.parse_args(argv)
 
     if args.demo:
@@ -766,7 +838,12 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     # Standard Markdown mode (single file, which may be a consolidated IR).
-    text = render_consolidated_report(in_path, categories_path=args.categories)
+    text = render_consolidated_report(
+        in_path,
+        categories_path=args.categories,
+        start_date=args.start_date,
+        end_date=args.end_date,
+    )
     out_path = out_dir / (in_path.stem + "_Finance_Report.md")
     _ = out_path.write_text(text, encoding="utf-8")
     print(f"Written: {out_path}")
@@ -776,6 +853,8 @@ def main(argv: list[str] | None = None) -> int:
 def build_income_expense_drilldowns(
     consolidated_path: Path,
     categories_path: Path,
+    start_date: str | None = None,
+    end_date: str | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Build income/expense drilldowns for the consolidated report.
 
@@ -784,6 +863,9 @@ def build_income_expense_drilldowns(
     ``(income_drilldown, expense_drilldown)`` in the shape the report renderer
     expects. Safe to call on any consolidated IR path.
 
+    When *start_date* and/or *end_date* are provided, only transactions within
+    the inclusive date range are included.
+
     This is the canonical implementation of the logic duplicated historically in
     the ``batch_parse`` test driver; callers (CLI ``main``, scripts) should use
     this instead of re-implementing it.
@@ -791,7 +873,7 @@ def build_income_expense_drilldowns(
     income_drill: list[dict[str, Any]] = []
     expense_drill: list[dict[str, Any]] = []
     try:
-        _, ir_rows = _load_ir_with_txn_id(consolidated_path)
+        _, ir_rows = _load_ir_with_txn_id(consolidated_path, start_date, end_date)
     except Exception:
         return income_drill, expense_drill
 
@@ -1003,13 +1085,18 @@ def _build_meta(data: dict[str, Any], path: Path) -> dict[str, Any]:
     return meta
 
 
-def _load_ir_with_txn_id(path: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+def _load_ir_with_txn_id(path: Path,
+                         start_date: str | None = None,
+                         end_date: str | None = None) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Load an IR JSON and return (meta, flat_txn_rows_with_txn_id).
 
     Handles both old (flat ``transactions[]``) and new
     (nested ``accounts[].transactions[]``) IR formats.
     Each returned row has: txn_id, date, description, amount, currency,
     balance_after, bank, account, is_internal_transfer.
+
+    When *start_date* and/or *end_date* are provided, only transactions whose
+    ``posted_date`` falls within the inclusive range are included.
     """
     data = json.loads(path.read_text(encoding="utf-8"))
     meta = _build_meta(data, path)
@@ -1025,6 +1112,15 @@ def _load_ir_with_txn_id(path: Path) -> tuple[dict[str, Any], list[dict[str, Any
             acct_ccy = acct.get("currency", "")
             acct_type = acct.get("account_type", "")
             for txn in acct.get("transactions", []):
+                # Apply date filter early to skip unwanted transactions
+                if start_date or end_date:
+                    posted = str(txn.get("posted_date", "")).strip()
+                    if not posted:
+                        continue
+                    if start_date and posted < start_date:
+                        continue
+                    if end_date and posted > end_date:
+                        continue
                 desc = str(txn.get("description", "")).strip()
                 is_internal = bool(txn.get("is_internal_transfer", False)) or _is_self_reference(desc, own_digits)
                 if is_internal:

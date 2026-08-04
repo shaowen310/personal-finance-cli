@@ -29,7 +29,7 @@ class ICBCExtractor(BaseExtractor):
         return "ICBC"
 
     @override
-    def to_ir(self, pdf_path: Path) -> ParsedStatement:
+    def _parse(self, pdf_path: Path) -> ParsedStatement:
         from ..parsers.icbc_parser import parse_icbc
 
         pdf = self._open_pdf(pdf_path)

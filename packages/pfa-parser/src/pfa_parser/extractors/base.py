@@ -43,9 +43,25 @@ class BaseExtractor(ABC):
         ...
 
     @abstractmethod
-    def to_ir(self, pdf_path: Path) -> ParsedStatement:
-        """Parse the PDF and return a structured ``ParsedStatement``."""
+    def _parse(self, pdf_path: Path) -> ParsedStatement:
+        """Parse the PDF and return a raw (un-postprocessed) ``ParsedStatement``.
+
+        Subclasses implement this; callers should use :meth:`to_ir` instead,
+        which wraps this with the standard post-processing pipeline.
+        """
         ...
+
+    def to_ir(self, pdf_path: Path) -> ParsedStatement:
+        """Parse the PDF and return a fully post-processed ``ParsedStatement``.
+
+        Calls :meth:`_parse` followed by :func:`postprocess_statement`
+        (meta validation, running-balance fill, FD-CA linking, transfer-link
+        verification, etc.). The returned statement is ready for downstream
+        consumption without further processing.
+        """
+        from ..postprocess import postprocess_statement
+        stmt = self._parse(pdf_path)
+        return postprocess_statement(stmt)
 
     @classmethod
     @abstractmethod

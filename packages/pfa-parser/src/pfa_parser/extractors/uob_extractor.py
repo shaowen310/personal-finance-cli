@@ -68,7 +68,7 @@ class UOBTxnExtractor(BaseExtractor):
         return "UOB"
 
     @override
-    def to_ir(self, pdf_path: Path) -> ParsedStatement:
+    def _parse(self, pdf_path: Path) -> ParsedStatement:
         from ..parsers.uob_parser import parse_uob_txn
 
         pdf = self._open_pdf(pdf_path)
@@ -139,7 +139,7 @@ class UOBOneExtractor(BaseExtractor):
         return "UOB"
 
     @override
-    def to_ir(self, pdf_path: Path) -> ParsedStatement:
+    def _parse(self, pdf_path: Path) -> ParsedStatement:
         from ..parsers.uob_parser import parse_uob_one
 
         pdf = self._open_pdf(pdf_path)
@@ -236,7 +236,7 @@ class UOBPortfolioExtractor(BaseExtractor):
         return "UOB"
 
     @override
-    def to_ir(self, pdf_path: Path) -> ParsedStatement:
+    def _parse(self, pdf_path: Path) -> ParsedStatement:
         from ..parsers.uob_parser import parse_uob_portfolio
 
         pdf = self._open_pdf(pdf_path)

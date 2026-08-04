@@ -293,15 +293,16 @@ def _synthesize_ca_twin(
     desc = fd_leg.description or ""
 
     def _make_ca(label: str, amt: float, *, is_internal_transfer: bool) -> Transaction:
+        desc_with_label = f"Synthetic: {desc} [{label}]"
         return Transaction(
             txn_id=generate_txn_id(
                 fd_leg.posted_date, amt,
-                fd_leg.currency, f"Synthetic: {desc} ({label})",
+                fd_leg.currency, desc_with_label,
             ),
             posted_date=fd_leg.posted_date,
             amount=amt,
             currency=fd_leg.currency,
-            description=f"Synthetic: {desc}",
+            description=desc_with_label,
             transfer_labels=[label],
             is_internal_transfer=is_internal_transfer,
         )
@@ -676,4 +677,26 @@ def verify_txn_links(statement: ParsedStatement) -> ParsedStatement:
                 )
                 if warn not in statement.warnings:
                     statement.warnings.append(warn)
+    return statement
+
+
+def postprocess_statement(statement: ParsedStatement) -> ParsedStatement:
+    """Run the full post-processing pipeline on a :class:`ParsedStatement`.
+
+    This is the canonical entry point for all post-extraction passes:
+    meta validation → running-balance fill → account-balance fill →
+    FD-CA linking → balance verification → FD interest verification →
+    transfer-link verification.
+
+    Mutates and returns *statement*. Callers that produce a
+    ``ParsedStatement`` (extractors, batch scripts) should always run
+    this before persisting the IR JSON.
+    """
+    statement = verify_statement_meta(statement)
+    statement = fill_fd_running_balances(statement)
+    statement = fill_account_balances(statement)
+    statement = link_fd_to_ca(statement)
+    statement = verify_account_balances(statement)
+    statement = verify_fd_interest_consistency(statement)
+    statement = verify_txn_links(statement)
     return statement

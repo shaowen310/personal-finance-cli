@@ -34,15 +34,7 @@ from pdfplumber.pdf import PDF as PDFType
 
 from pfa_ir_schema import from_json as ir_from_json, ParsedStatement
 
-from .postprocess import (
-    fill_account_balances,
-    fill_fd_running_balances,
-    link_fd_to_ca,
-    verify_account_balances,
-    verify_fd_interest_consistency,
-    verify_statement_meta,
-    verify_txn_links,
-)
+from .postprocess import postprocess_statement
 
 from .renderers.markdown import MD_RENDERER_REGISTRY
 
@@ -265,13 +257,7 @@ def main() -> None:
     if in_path.suffix.lower() == ".json":
         json_str = in_path.read_text(encoding="utf-8")
         ir = ir_from_json(json_str)
-        ir = verify_statement_meta(ir)
-        ir = fill_fd_running_balances(ir)
-        ir = fill_account_balances(ir)
-        ir = link_fd_to_ca(ir)
-        ir = verify_account_balances(ir)
-        ir = verify_fd_interest_consistency(ir)
-        ir = verify_txn_links(ir)
+        ir = postprocess_statement(ir)
         print(f"Loaded IR: {in_path}  ({sum(len(a.transactions) for a in ir.accounts)} txns, parser: {ir.parser.name})")
         if ir_only:
             return  # validate only, do nothing
@@ -300,14 +286,7 @@ def main() -> None:
         sys.exit(1)
 
     extractor = ir_cls()
-    ir = extractor.to_ir(in_path)
-    ir = verify_statement_meta(ir)
-    ir = fill_fd_running_balances(ir)
-    ir = fill_account_balances(ir)
-    ir = link_fd_to_ca(ir)
-    ir = verify_account_balances(ir)
-    ir = verify_fd_interest_consistency(ir)
-    ir = verify_txn_links(ir)
+    ir = extractor.to_ir(in_path)  # includes postprocessing
 
     # Write IR JSON (unmasked raw data)
     ir_path = out_path.with_suffix(".ir.json")

@@ -28,7 +28,7 @@ class DBSExtractor(BaseExtractor):
         return "DBS/POSB"
 
     @override
-    def to_ir(self, pdf_path: Path) -> ParsedStatement:
+    def _parse(self, pdf_path: Path) -> ParsedStatement:
         from ..parsers.dbs_parser import parse_dbs
 
         pdf = self._open_pdf(pdf_path)

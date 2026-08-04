@@ -51,7 +51,7 @@ class OCBCConsolidatedExtractor(BaseExtractor):
         return "OCBC"
 
     @override
-    def to_ir(self, pdf_path: Path) -> ParsedStatement:
+    def _parse(self, pdf_path: Path) -> ParsedStatement:
         from pfa_ir_schema.common import PDF
         from ..parsers.ocbc_parser import parse_consolidated
 
@@ -186,7 +186,7 @@ class OCRCCardExtractor(BaseExtractor):
         return "OCBC"
 
     @override
-    def to_ir(self, pdf_path: Path) -> ParsedStatement:
+    def _parse(self, pdf_path: Path) -> ParsedStatement:
         from pfa_ir_schema.common import PDF
         from ..parsers.ocbc_parser import parse_card
 
