@@ -86,11 +86,19 @@ class OCBCConsolidatedExtractor(BaseExtractor):
             accounts_map.setdefault(key, []).append(t)
 
         for (acct_no, acct_name), txns in accounts_map.items():
+            # Derive closing_balance from the last transaction's balance_after
+            # column (the parser extracts it from the statement's "Balance" col).
+            closing_balance: float | None = None
+            last_balance_str = str(txns[-1].get("balance", "") or "").replace(",", "") if txns else ""
+            if last_balance_str:
+                closing_balance = float(last_balance_str)
+
             _ = builder.add_account(
                 name=acct_name,
                 account_no=acct_no,
                 account_type=_ocbc_account_type(acct_name),
                 currency=base_ccy,
+                closing_balance=closing_balance,
             )
             for t in txns:
                 withdrawal = float(str(t.get("withdrawal", "0") or "0").replace(",", ""))
