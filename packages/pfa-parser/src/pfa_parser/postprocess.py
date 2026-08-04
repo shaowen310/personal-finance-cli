@@ -680,13 +680,36 @@ def verify_txn_links(statement: ParsedStatement) -> ParsedStatement:
     return statement
 
 
+_CREDIT_CARD_TYPES: frozenset[str] = frozenset({"credit_card", "credit", "card"})
+
+
+def fill_cc_balances(statement: ParsedStatement) -> ParsedStatement:
+    """Fill ``balance_after`` on credit-card transactions.
+
+    Sorts transactions by ``posted_date``, then computes a running balance
+    starting from the account's ``opening_balance``. Mutates and returns
+    *statement*.
+    """
+    for acct in statement.accounts:
+        atype = str(acct.account_type or "").lower()
+        if atype not in _CREDIT_CARD_TYPES:
+            continue
+        txns = sorted(acct.transactions, key=lambda t: t.posted_date or "")
+        running = acct.opening_balance or 0.0
+        for txn in txns:
+            amt = txn.amount or 0.0
+            running += amt
+            txn.balance_after = running
+    return statement
+
+
 def postprocess_statement(statement: ParsedStatement) -> ParsedStatement:
     """Run the full post-processing pipeline on a :class:`ParsedStatement`.
 
     This is the canonical entry point for all post-extraction passes:
     meta validation → running-balance fill → account-balance fill →
     FD-CA linking → balance verification → FD interest verification →
-    transfer-link verification.
+    credit-card balance fill → transfer-link verification.
 
     Mutates and returns *statement*. Callers that produce a
     ``ParsedStatement`` (extractors, batch scripts) should always run
@@ -698,5 +721,6 @@ def postprocess_statement(statement: ParsedStatement) -> ParsedStatement:
     statement = link_fd_to_ca(statement)
     statement = verify_account_balances(statement)
     statement = verify_fd_interest_consistency(statement)
+    statement = fill_cc_balances(statement)
     statement = verify_txn_links(statement)
     return statement

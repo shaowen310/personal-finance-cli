@@ -434,30 +434,34 @@ def compute_metrics(txns: list[Txn], meta: dict[str, Any], ccy: str,
     }
 
 
-def build_assets(meta: dict[str, Any], metrics_by_ccy: dict[str, dict[str, Any]]) -> dict[str, dict[str, float]]:
+def build_assets(meta: dict[str, Any], metrics_by_ccy: dict[str, dict[str, Any]],
+                  cc_balances: dict[str, float] | None = None) -> dict[str, dict[str, float]]:
     """Assemble balance-sheet assets: cash, time deposits, investments (per currency).
-    Credit-card balances are treated as liabilities (deducted from net worth)."""
+
+    Credit-card balances are treated as liabilities (deducted from net worth).
+    *cc_balances* is a ``{ccy: balance}`` dict derived from the last
+    ``balance_after`` on credit-card transactions.
+    """
     cash: dict[str, float] = defaultdict(float)
     liabilities: dict[str, float] = defaultdict(float)
-    # Account types that are NOT liquid cash (handled via time_deposits /
-    # investment_holdings instead) — keep them out of the cash bucket so we
-    # don't double count.
     _NON_CASH = _NON_CASH_ACCOUNT_TYPES
     if meta.get("account_summary"):
         for a in meta["account_summary"]:
             at = str(a.get("account_type", "")).lower()
-            if at in _NON_CASH:
-                continue
-            if at in _LIABILITY_ACCOUNT_TYPES:
-                c = a.get("currency")
-                b = parse_num(a.get("closing_balance"))
-                if c and b is not None:
-                    liabilities[c] += abs(b)
+            if at in _NON_CASH or at in _LIABILITY_ACCOUNT_TYPES:
                 continue
             c = a.get("currency")
             b = parse_num(a.get("closing_balance"))
             if c and b is not None:
                 cash[c] += b
+    else:
+        for ccy, m in metrics_by_ccy.items():
+            if m["closing"] is not None:
+                cash[ccy] += m["closing"]
+    if cc_balances:
+        for ccy, bal in cc_balances.items():
+            if bal > 0:
+                liabilities[ccy] += bal
     else:
         for ccy, m in metrics_by_ccy.items():
             if m["closing"] is not None:
@@ -608,16 +612,14 @@ def _analyze_consolidated(raw: dict[str, Any], meta: dict[str, Any],
     for lst in by_ccy.values():
         lst.sort(key=lambda x: x["date"])
 
-    # Opening/closing per currency from account balances (cash + credit-card
-    # accounts) — authoritative for a consolidated IR when the full statement
-    # period is analysed. When the date range is truncated we derive
-    # opening/closing from the filtered transaction stream instead.
+    # Opening/closing per currency from cash account balances. Credit-card
+    # balances are handled separately via balance_after below.
     opening_by_ccy: dict[str, float] = {}
     closing_by_ccy: dict[str, float] = {}
     if not use_txn_balances:
         for a in meta["account_summary"]:
             atype = str(a.get("account_type", "")).lower()
-            if atype in ("fixed", "time", "securities", "investment"):
+            if atype in ("fixed", "time", "securities", "investment", *_LIABILITY_ACCOUNT_TYPES):
                 continue
             ccy = a.get("currency", "")
             op = parse_num(a.get("opening_balance"))
@@ -625,6 +627,23 @@ def _analyze_consolidated(raw: dict[str, Any], meta: dict[str, Any],
             if ccy:
                 opening_by_ccy[ccy] = opening_by_ccy.get(ccy, 0.0) + (op or 0.0)
                 closing_by_ccy[ccy] = closing_by_ccy.get(ccy, 0.0) + (cl or 0.0)
+
+    # Credit-card liability: use balance_after when date-truncated
+    # (reflects the filtered window), otherwise fall back to
+    # account_summary (handles consolidated IRs with overlapping data).
+    cc_balances: dict[str, float] = {}
+    # Walk txns in reverse date order to pick the latest balance_after.
+    cc_txns = sorted(
+        (t for t in txns if str(t.get("account_type", "")).lower() in _LIABILITY_ACCOUNT_TYPES),
+        key=lambda t: t["date"], reverse=True,
+    )
+    for t in cc_txns:
+        ccy = t["currency"]
+        if ccy in cc_balances:
+            continue
+        bal = t.get("balance_after")
+        if bal is not None and bal > 0:
+            cc_balances[ccy] = bal
 
     metrics_by_ccy: dict[str, dict[str, Any]] = {}
     for ccy, lst in by_ccy.items():
@@ -637,7 +656,7 @@ def _analyze_consolidated(raw: dict[str, Any], meta: dict[str, Any],
             use_txn_balances=use_txn_balances,
         )
 
-    assets = build_assets(meta, metrics_by_ccy)
+    assets = build_assets(meta, metrics_by_ccy, cc_balances=cc_balances)
     drilldown = build_balance_sheet_drilldown(raw)
     return {
         "meta": meta, "metrics_by_ccy": metrics_by_ccy, "assets": assets,
@@ -665,7 +684,20 @@ def analyze_statement(raw: dict[str, Any], meta: dict[str, Any],
         metrics_by_ccy[ccy] = compute_metrics(lst, meta, ccy,
                                               use_txn_balances=use_txn_balances)
 
-    assets = build_assets(meta, metrics_by_ccy)
+    cc_balances: dict[str, float] = {}
+    cc_txns = sorted(
+        (t for t in txns if str(t.get("account_type", "")).lower() in _LIABILITY_ACCOUNT_TYPES),
+        key=lambda t: t["date"], reverse=True,
+    )
+    for t in cc_txns:
+        ccy = t["currency"]
+        if ccy in cc_balances:
+            continue
+        bal = t.get("balance_after")
+        if bal is not None and bal > 0:
+            cc_balances[ccy] = bal
+
+    assets = build_assets(meta, metrics_by_ccy, cc_balances=cc_balances)
     drilldown = build_balance_sheet_drilldown(raw)
     return {
         "meta": meta, "metrics_by_ccy": metrics_by_ccy, "assets": assets,
@@ -935,7 +967,7 @@ def build_income_expense_drilldowns(
                 "account_type": str(row.get("account_type", "")),
             })
         elif cat_cls == "Income":
-            src = _classify_income_source(row["description"])
+            src = cat_sub or cat_full or "Income"
             src_ccy[src][row["currency"]] += abs(float(row["amount"]))
             src_txns[src].append({
                 "date": str(row.get("date", "")),
@@ -954,7 +986,7 @@ def build_income_expense_drilldowns(
             # classification to assign to income or expense.
             flow = classify_cash_flow(row)
             if flow == "Income":
-                src = _classify_income_source(row["description"])
+                src = cat_full or "Income"
                 src_ccy[src][row["currency"]] += abs(float(row["amount"]))
                 src_txns[src].append({
                     "date": str(row.get("date", "")),
@@ -1086,26 +1118,6 @@ def _split_default(txns: list[Txn], meta: dict[str, Any]) -> dict[str, dict[str,
 # ---------------------------------------------------------------------------
 
 
-# Income sub-classification keywords (applied to txns already categorized
-# as "Income" by txn-categorize, to split into sources).
-_INCOME_SOURCE_KEYWORDS: list[tuple[str, str]] = [
-    ("SALARY", "Salary"),
-    ("PAYROLL", "Salary"),
-    ("IBG GIRO SALA", "Salary"),
-    ("DIVIDEND", "Dividends"),
-    ("INTEREST", "Interest"),
-    ("INTERESTINT", "Interest"),
-    ("CREDIT INTEREST", "Interest"),
-    ("INTEREST CREDIT", "Interest"),
-    ("INTEREST EARNED", "Interest"),
-    ("CASH REBATE", "Rebates/Cashback"),
-    ("REBATE", "Rebates/Cashback"),
-    ("BONUS", "Bonus"),
-    ("FIXED DEPOSIT", "FD Interest"),
-    ("FDWD", "FD Interest"),
-    ("TIME DEPO", "FD Interest"),
-]
-
 # Discretionary vs non-discretionary classification.
 _DISCRETIONARY_MAP: dict[str, bool] = {
     "Groceries": False,
@@ -1130,15 +1142,6 @@ _NON_CASH_ACCOUNT_TYPES = {
 _FD_ACCOUNT_TYPES = {"fixed", "time", "fixed_deposit", "time_deposit"}
 # Liability accounts — their balances represent debt, not assets.
 _LIABILITY_ACCOUNT_TYPES = {"credit_card"}
-
-
-def _classify_income_source(description: str) -> str:
-    """Map an income transaction description to a source label."""
-    upper = description.upper()
-    for keyword, source in _INCOME_SOURCE_KEYWORDS:
-        if keyword in upper:
-            return source
-    return "Other Income"
 
 
 def _classify_discretionary(category: str) -> bool:
@@ -1467,7 +1470,8 @@ def build_dashboard_json(
         cat = categories.get(txn_id, "")
         if cat and "Transfer" in cat and "Income" not in cat:
             continue
-        source = _classify_income_source(row["description"])
+        cat_cls, cat_sub = _split_cat(cat) if cat else ("", "")
+        source = cat_sub if cat_cls == "Income" else (cat or "Income")
         latest_income[source][row["currency"]] += abs(row["amount"])
 
     for source in sorted(latest_income):
@@ -1516,7 +1520,8 @@ def build_dashboard_json(
             cat = categories.get(txn_id, "")
             if cat and "Transfer" in cat and "Income" not in cat:
                 continue
-            source = _classify_income_source(row["description"])
+            cat_cls, cat_sub = _split_cat(cat) if cat else ("", "")
+            source = cat_sub if cat_cls == "Income" else (cat or "Income")
             conv = convert_to_sgd(abs(row["amount"]), row["currency"], fx_rates)
             period_income[source] += conv if conv is not None else abs(row["amount"])
         all_sources = set(list(income_trend_by_source) + list(period_income))

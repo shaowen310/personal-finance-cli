@@ -133,7 +133,7 @@ def render_report(result: dict[str, Any], consolidated: bool = False,
             cls_disp = entry["class"] or "\u2014"
             out.append(f"| {cls_disp} | {entry['category']} | {entry['count']} |")
         total_cnt = sum(e["count"] for e in cat_summary)
-        out.append(f"| | **Total** | **{total_cnt}** |")
+        out.append(f"| **Total** | | **{total_cnt}** |")
         out.append("")
 
     # ---- 2. Balance Sheet ----------------------------------------------------

@@ -8,7 +8,7 @@ from __future__ import annotations
 from collections import OrderedDict
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, ClassVar, cast, override
+from typing import TYPE_CHECKING, Any, ClassVar, cast, override
 
 from pfa_ir_schema import AccountType, ParsedStatement
 from .base import BaseExtractor
@@ -243,7 +243,8 @@ class OCRCCardExtractor(BaseExtractor):
                 continue
             sgd_amount = float(amount_signed)
 
-            # Separate foreign-currency amount from SGD base amount.
+            # Store foreign-currency details in extras for reference.
+            extras: dict[str, Any] = {}
             fc_str = str(t.get("foreign_currency", "")).strip()
             currency = "SGD"
             amount = sgd_amount
@@ -252,14 +253,19 @@ class OCRCCardExtractor(BaseExtractor):
                 if len(parts) == 2 and len(parts[0]) == 3 and parts[0].isalpha() and parts[0].isupper():
                     fc_amount = float(parts[1].replace(",", ""))
                     if fc_amount != 0:
-                        currency = parts[0]
-                        amount = fc_amount if sgd_amount > 0 else -fc_amount
+                        extras["foreign_currency"] = parts[0]
+                        extras["foreign_amount"] = fc_amount
+                        # Amount and currency stay in SGD — the true
+                        # value charged to the card is the SGD amount.
+                        amount = sgd_amount
+                        currency = "SGD"
 
             _ = builder.add_transaction(
                 posted_date=str(t.get("date_iso", t.get("date", ""))),
                 amount=amount,
                 currency=currency,
                 description=str(t.get("description", "")),
+                extras=extras if extras else None,
             )
 
         # ---- Populate credit card summary (bank-agnostic fields) ----

@@ -11,9 +11,11 @@
 #
 # TWO-LEVEL SCHEME:
 #   Categories use "Class: Subtype" format. Classes:
-#   - Income   (Salary, Bonus, Interest, Dividends, Investment, Other)
+#   - Income   (Salary, Bonus, Interest, Dividends, Investment,
+#               Cashback, Other)
 #   - Expense  (Groceries, Dining, Transport, Utilities, Shopping, Travel,
-#               Entertainment, Health, Personal Care, Other)
+#               Entertainment, Health, Personal Care, Bank Fees, CW, Tax,
+#               Productivity, Other)
 #   - Transfer (Internal, External)
 
 categories:
@@ -22,6 +24,7 @@ categories:
   - "Income: Interest"
   - "Income: Dividends"
   - "Income: Investment"
+  - "Income: Cashback"
   - "Income: Other"
   - "Expense: Groceries"
   - "Expense: Dining"
@@ -35,12 +38,10 @@ categories:
   - "Expense: CW"
   - "Expense: Tax"
   - "Expense: Productivity"
+  - "Expense: Bank Fees"
   - "Expense: Other"
-  - "Other: Other"
   - "Transfer: Internal"
   - "Transfer: External"
-
-default_category: "Other: Other"
 
 rules:
   # =========================================================================
@@ -71,10 +72,29 @@ rules:
       - PAYROLL
       - IBG GIRO SALA
 
-  - category: "Income: Other"
+  - category: "Income: Bonus"
+    match:
+      - BONUS
+
+  - category: "Income: Interest"
+    match:
+      - INTEREST
+      - INTERESTINT
+      - CREDIT INTEREST
+      - INTEREST CREDIT
+      - INTEREST EARNED
+      - FIXED DEPOSIT
+      - FDWD
+      - TIME DEPO
+
+  - category: "Income: Dividends"
+    match:
+      - DIVIDEND
+
+  - category: "Income: Cashback"
     match:
       - CASH REBATE
-      - INWARD CREDIT
+      - REBATE
 
   # =========================================================================
   # 2. Groceries — supermarkets, specialty grocers, convenience
@@ -90,7 +110,6 @@ rules:
       - GUSTO
       - SHENG SIONG
       - GIANT
-      - 99 OLD TREES DURIAN
       - FRESH FRUITS
 
   # =========================================================================
@@ -128,6 +147,8 @@ rules:
       # Chicken / soup / speciality
       - OMMA CHICKEN
       - CHICKEN SOUP
+      # Desert
+      - 99 OLD TREES DURIAN
       # Food delivery
       - FOODPANDA
       - GRABFOOD
@@ -216,9 +237,9 @@ rules:
       - CENTAURI
 
   # =========================================================================
-  # 9. Other — bank charges, misc debits, FX conversion fees
+  # 9. Bank Fees — bank charges, misc debits, FX conversion fees
   # =========================================================================
-  - category: "Expense: Other"
+  - category: "Expense: Bank Fees"
     match:
       - SERVICE CHARGE
       - ANNUAL FEE

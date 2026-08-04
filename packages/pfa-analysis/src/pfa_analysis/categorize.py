@@ -36,6 +36,7 @@ class TxnRow:
     date: str  # "YYYY-MM-DD"
     bank: str  # owning institution name
     account: str  # raw account_no
+    account_type: str  # "current", "savings", "credit_card", "fixed_deposit", …
     description: str
     amount: float  # signed: + inflow, - outflow
     balance_after: float | None
@@ -43,6 +44,9 @@ class TxnRow:
     category_hint: str | None = None  # from IR parser (e.g. "fixed_deposit")
     tags: list[str] | None = None  # from IR parser (e.g. ["fd_principal"])
     is_internal_transfer: bool = False  # from IR parser
+
+# Account types where positive amounts represent debits (outflows).
+_CREDIT_LIKE: frozenset[str] = frozenset({"credit_card", "credit", "card"})
 
 
 # ---------------------------------------------------------------------------
@@ -60,12 +64,19 @@ def parse_input(path: Path) -> tuple[list[TxnRow], list[dict[str, Any]], dict[st
     """
     ir_data = parse_ir(path)
 
+    # Build account_no → account_type lookup from raw accounts.
+    acct_types: dict[str, str] = {
+        a["account_no"]: a.get("account_type", "")
+        for a in ir_data.accounts_raw
+    }
+
     txns = [
         TxnRow(
             txn_id=row["txn_id"],
             date=row["date"],
             bank=row["bank"],
             account=row["account"],
+            account_type=acct_types.get(row["account"], ""),
             description=row["description"],
             amount=row["amount"],
             balance_after=row.get("balance_after"),
@@ -470,7 +481,7 @@ def print_summary(txns: list[TxnRow], result: dict[str, str], *, default_categor
     }
 
     n_total = len(txns)
-    n_un = cat_counts.get(default_category, 0)
+    n_un = cat_counts.get("Income:Other", 0) + cat_counts.get("Expense:Other", 0)
     n_categorized = n_total - n_un
 
     print()
@@ -514,7 +525,8 @@ def print_summary(txns: list[TxnRow], result: dict[str, str], *, default_categor
             print(f"  {cls_name:30s} {cls_counts[cls_name]:>5d}")
 
     print(f"\n---")
-    print(f"  {default_category + ' (default):':30s} {n_un:>5d}")
+    if n_un:
+        print(f"  {'Other (fallback):':30s} {n_un:>5d}")
     coverage = n_categorized / n_total * 100 if n_total else 0
     print(f"  {'Coverage:':30s} {coverage:>5.1f}%")
     print(f"  {'Total transactions:':30s} {n_total:>5d}")
@@ -553,7 +565,6 @@ def categorize(
     rules_data = load_rules(rules_path)
     rules: list[dict[str, Any]] = rules_data.get("rules", [])
     known_categories: list[str] = rules_data.get("categories", [])
-    default_cat: str = rules_data.get("default_category", "Uncategorized")
 
     # 4. Internal transfer pre-classification --------------------------------
     result: dict[str, str] = {}
@@ -596,7 +607,7 @@ def categorize(
             + f"{still_un} still uncategorized."
         )
 
-    # 8. Fill remaining with default category --------------------------------
+    # 8. Fill remaining — income/expense-aware fallback -----------------------
     for txn in txns:
         if txn.txn_id not in result:
             # Try category_hint as a last-resort classification
@@ -607,7 +618,17 @@ def categorize(
                     mapped = _HINT_CATEGORY_MAP.get(tag)
                     if mapped:
                         break
-            result[txn.txn_id] = mapped if (mapped and mapped in known_categories) else default_cat
+            if mapped and mapped in known_categories:
+                result[txn.txn_id] = mapped
+                continue
+
+            # Determine income vs expense from amount sign and account type.
+            at = txn.account_type.lower()
+            is_debit = (txn.amount > 0) if at in _CREDIT_LIKE else (txn.amount < 0)
+            if is_debit:
+                result[txn.txn_id] = "Expense:Other"
+            else:
+                result[txn.txn_id] = "Income:Other"
 
     return result
 
