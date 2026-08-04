@@ -772,6 +772,28 @@ def render_consolidated_report(
     income_drill, expense_drill = build_income_expense_drilldowns(
         consolidated_path, cat_path, start_date, end_date,
     )
+    transfer_drill = build_transfer_drilldown(
+        consolidated_path, cat_path, start_date, end_date,
+    )
+
+    # Build categorization summary from drilldown data.
+    cat_summary: list[dict[str, Any]] = []
+    total_cat = 0
+    for entry in income_drill:
+        cnt = len(entry.get("transactions", []))
+        total_cat += cnt
+        cat_summary.append({"class": "Income", "category": entry["source"], "count": cnt})
+    for entry in expense_drill:
+        cnt = len(entry.get("transactions", []))
+        total_cat += cnt
+        cat_summary.append({"class": "Expense", "category": entry["category"], "count": cnt})
+    for entry in transfer_drill:
+        cnt = len(entry.get("transactions", []))
+        total_cat += cnt
+        cat_summary.append({"class": "Transfer", "category": entry["category"], "count": cnt})
+    # Count internal transfers (excluded from drilldowns but present in IR).
+    total_txns = total_cat + len(_internal_transfer_ids(consolidated_path, start_date, end_date))
+    cat_coverage = (total_cat / total_txns * 100) if total_txns else 0.0
 
     return render_report(
         result,
@@ -780,6 +802,9 @@ def render_consolidated_report(
         drilldown=result.get("drilldown"),
         income_drilldown=income_drill if income_drill else None,
         expense_drilldown=expense_drill if expense_drill else None,
+        transfer_drilldown=transfer_drill if transfer_drill else None,
+        cat_summary=cat_summary if cat_summary else None,
+        cat_coverage=cat_coverage,
     )
 
 
@@ -969,6 +994,84 @@ def build_income_expense_drilldowns(
     return income_drill, expense_drill
 
 
+def _internal_transfer_ids(
+    consolidated_path: Path,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> list[str]:
+    """Return txn_ids of internal transfers in the consolidated IR (date-filtered)."""
+    try:
+        _, ir_rows = _load_ir_with_txn_id(consolidated_path, start_date, end_date,
+                                          keep_internal=True)
+    except Exception:
+        return []
+    return [r.get("txn_id", "") for r in ir_rows if r.get("is_internal_transfer")]
+
+
+def build_transfer_drilldown(
+    consolidated_path: Path,
+    categories_path: Path,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> list[dict[str, Any]]:
+    """Build transfer drilldown from a consolidated IR and categories.
+
+    Groups transactions by their transfer sub-category (from ``categories.json``,
+    e.g. ``Transfer: Internal``, ``Transfer: External``) and by ``is_internal_transfer``
+    flag. Returns a list of ``{"category": str, "by_currency": {ccy: amount}, "transactions": [...]}``
+    dicts sorted by total absolute amount descending.
+    """
+    transfer_drill: list[dict[str, Any]] = []
+    try:
+        _, ir_rows = _load_ir_with_txn_id(consolidated_path, start_date, end_date)
+    except Exception:
+        return transfer_drill
+
+    categories: dict[str, str] = {}
+    if Path(categories_path).exists():
+        try:
+            categories = json.loads(Path(categories_path).read_text(encoding="utf-8"))
+        except Exception:
+            categories = {}
+
+    tr_ccy: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
+    tr_txns: dict[str, list[dict[str, Any]]] = defaultdict(list)
+
+    for row in ir_rows:
+        txn_id = row.get("txn_id", "")
+        cat_full = categories.get(txn_id, "")
+        cat_cls, cat_sub = _split_cat(cat_full) if cat_full else ("", "")
+
+        # Determine transfer category.
+        if cat_cls == "Transfer":
+            cat_disp = cat_sub or cat_full or "Transfer"
+        elif row.get("is_internal_transfer"):
+            cat_disp = "Internal Transfer"
+        else:
+            # Skip non-transfer transactions.
+            continue
+
+        tr_ccy[cat_disp][row["currency"]] += float(row["amount"])
+        tr_txns[cat_disp].append({
+            "date": str(row.get("date", "")),
+            "description": str(row.get("description", "")),
+            "amount": abs(float(row["amount"])),
+            "currency": str(row.get("currency", "")),
+            "bank": str(row.get("bank", "")),
+            "account": str(row.get("account", "")),
+            "account_type": str(row.get("account_type", "")),
+        })
+
+    for cat in sorted(tr_ccy, key=lambda c: -sum(abs(v) for v in tr_ccy[c].values())):
+        transfer_drill.append({
+            "category": cat,
+            "by_currency": dict(tr_ccy[cat]),
+            "transactions": sorted(tr_txns[cat], key=lambda t: -t["amount"]),
+        })
+
+    return transfer_drill
+
+
 def _split_default(txns: list[Txn], meta: dict[str, Any]) -> dict[str, dict[str, Any]]:
     """Helper for demo: group default-schema txns by currency and compute metrics."""
     by_ccy: dict[str, list[Txn]] = defaultdict(list)
@@ -1119,7 +1222,8 @@ def _build_meta(data: dict[str, Any], path: Path) -> dict[str, Any]:
 
 def _load_ir_with_txn_id(path: Path,
                          start_date: str | None = None,
-                         end_date: str | None = None) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+                         end_date: str | None = None,
+                         keep_internal: bool = False) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Load an IR JSON and return (meta, flat_txn_rows_with_txn_id).
 
     Handles both old (flat ``transactions[]``) and new
@@ -1129,6 +1233,8 @@ def _load_ir_with_txn_id(path: Path,
 
     When *start_date* and/or *end_date* are provided, only transactions whose
     ``posted_date`` falls within the inclusive range are included.
+
+    When *keep_internal* is True, internal transfers are not filtered out.
     """
     data = json.loads(path.read_text(encoding="utf-8"))
     meta = _build_meta(data, path)
@@ -1155,7 +1261,7 @@ def _load_ir_with_txn_id(path: Path,
                         continue
                 desc = str(txn.get("description", "")).strip()
                 is_internal = bool(txn.get("is_internal_transfer", False)) or _is_self_reference(desc, own_digits)
-                if is_internal:
+                if is_internal and not keep_internal:
                     continue
                 rows.append({
                     "txn_id": str(txn.get("txn_id", "")),

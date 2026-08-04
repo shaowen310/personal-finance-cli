@@ -17,7 +17,6 @@ jobs:
           pip install -e packages/pfa-fx
           pip install -e packages/pfa-parser
           pip install -e packages/pfa-ir-consolidator
-          pip install -e packages/pfa-categorize
           pip install -e packages/pfa-analysis
           pip install -e apps/pfa-cli
           pip install pytest

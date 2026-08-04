@@ -51,7 +51,10 @@ def render_report(result: dict[str, Any], consolidated: bool = False,
                   fx_rates: dict[str, Any] | None = None,
                   drilldown: list[dict[str, Any]] | None = None,
                   income_drilldown: list[dict[str, Any]] | None = None,
-                  expense_drilldown: list[dict[str, Any]] | None = None) -> str:
+                  expense_drilldown: list[dict[str, Any]] | None = None,
+                  transfer_drilldown: list[dict[str, Any]] | None = None,
+                  cat_summary: list[dict[str, Any]] | None = None,
+                  cat_coverage: float | None = None) -> str:
     """Render a balance-sheet + cash-flow Markdown report.
 
     Args:
@@ -118,6 +121,20 @@ def render_report(result: dict[str, Any], consolidated: bool = False,
     else:
         out.append("- No transactions in this statement (balance-sheet snapshot only).\n")
         out.append(f"- **Net Position:** {fmt(net_pos)}\n")
+
+    # ---- 1.1 Categorization Summary ------------------------------------------
+    if cat_summary:
+        out.append("## 1.1 Categorization Summary\n")
+        if cat_coverage is not None:
+            out.append(f"_Coverage: {cat_coverage:.1f}% of transactions categorized._\n")
+        out.append("| Class | Category | Count |")
+        out.append("|---|---:|---:|")
+        for entry in cat_summary:
+            cls_disp = entry["class"] or "\u2014"
+            out.append(f"| {cls_disp} | {entry['category']} | {entry['count']} |")
+        total_cnt = sum(e["count"] for e in cat_summary)
+        out.append(f"| | **Total** | **{total_cnt}** |")
+        out.append("")
 
     # ---- 2. Balance Sheet ----------------------------------------------------
     liabilities = assets.get("liabilities", {})
@@ -372,6 +389,69 @@ def render_report(result: dict[str, Any], consolidated: bool = False,
         out.append("")
 
         for entry in expense_drilldown:
+            txns = entry.get("transactions", [])
+            if not txns:
+                continue
+            cat = entry["category"]
+            out.append(f"### {cat}\n")
+            out.append("| Date | Institution | Account | Account Type | Description | Amount |")
+            out.append("|---|---|---|---|---|---:|")
+            for t in txns:
+                desc = t["description"].strip().replace("|", "\\|")
+                out.append(
+                    f"| {t['date']} | {t.get('bank', '')} | {t.get('account', '')} | "+
+                    f"{t.get('account_type', '')} | {desc} | {fmt(t['amount'])} {t.get('currency', '')} |"
+                )
+            out.append("")
+
+    # ---- Transfer Breakdown --------------------------------------------------
+    if transfer_drilldown:
+        out.append("## Transfer Breakdown\n")
+        transfer_ccies: list[str] = sorted(set(
+            c for entry in transfer_drilldown for c in entry["by_currency"]
+        ))
+        header_parts = ["| Category"]
+        for c in transfer_ccies:
+            header_parts.append(c)
+        if use_fx:
+            header_parts.append("SGD Eq.")
+        out.append(" | ".join(header_parts) + " |")
+        sep_parts = ["|---"]
+        for _ in transfer_ccies:
+            sep_parts.append("---:")
+        if use_fx:
+            sep_parts.append("---:")
+        out.append(" | ".join(sep_parts) + " |")
+
+        totals_sgd = 0.0
+        for entry in transfer_drilldown:
+            cat = entry["category"]
+            by_ccy = entry["by_currency"]
+            cells: list[str] = [cat]
+            row_sgd = 0.0
+            for c in transfer_ccies:
+                amt = by_ccy.get(c, 0.0)
+                cells.append(fmt(amt))
+                if use_fx:
+                    conv = convert_to_sgd(amt, c, fx_rates) or 0.0
+                    row_sgd += abs(conv)
+                else:
+                    totals_sgd += abs(amt)
+            if use_fx:
+                totals_sgd += row_sgd
+                cells.append(fmt(row_sgd))
+            out.append(" | ".join(cells) + " |")
+        if use_fx and totals_sgd:
+            total_parts = ["| **Total Transfers**"]
+            for _ in transfer_ccies:
+                total_parts.append("")
+            total_parts.append(f"**{fmt(totals_sgd)}**")
+            out.append(" | ".join(total_parts) + " |")
+        elif not use_fx:
+            out.append(f"| **Total Transfers (per currency above)** | | |")
+        out.append("")
+
+        for entry in transfer_drilldown:
             txns = entry.get("transactions", [])
             if not txns:
                 continue
