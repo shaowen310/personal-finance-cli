@@ -7,11 +7,12 @@ Steps:
   4. Generate markdown reports from consolidated.ir.json + categories.json
 
 Usage:
-    python tests/batch_parse.py
+    python tests/run_full_pipeline.py [--start DATE] [--end DATE]
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import shutil
@@ -174,7 +175,11 @@ def _step3_categorize(consolidated_path: Path) -> bool:
         return False
 
 
-def _step4_render_report(consolidated_path: Path) -> None:
+def _step4_render_report(
+    consolidated_path: Path,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> None:
     """Generate markdown reports from consolidated IR + categories."""
     categories_path = OUTPUT_DIR / "categories.json"
     if not categories_path.exists():
@@ -186,7 +191,10 @@ def _step4_render_report(consolidated_path: Path) -> None:
     try:
         from pfa_analysis.analyze import render_consolidated_report
 
-        md = render_consolidated_report(consolidated_path, categories_path)
+        md = render_consolidated_report(
+            consolidated_path, categories_path,
+            start_date=start_date, end_date=end_date,
+        )
         out_path = OUTPUT_DIR / "finance_report.md"
         _ = out_path.write_text(md, encoding="utf-8")
         print(f"OK → {out_path.name}")
@@ -195,7 +203,7 @@ def _step4_render_report(consolidated_path: Path) -> None:
         traceback.print_exc()
 
 
-def main() -> None:
+def main(start_date: str | None = None, end_date: str | None = None) -> None:
     pdf_paths = sorted(CACHE_DIR.glob("*.pdf"))
     if not pdf_paths:
         print("No PDF files found in", CACHE_DIR)
@@ -223,10 +231,26 @@ def main() -> None:
 
     # ── Step 4: Render Markdown Reports ────────────────────────────────────
     print("\n── Step 4: Render Reports ──")
-    _step4_render_report(consolidated_path)
+    _step4_render_report(consolidated_path, start_date, end_date)
 
     print(f"\nDone — outputs in {OUTPUT_DIR}")
 
 
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Run the full PFA pipeline: parse → consolidate → categorize → report.",
+    )
+    _ = parser.add_argument(
+        "--start", dest="start_date", default=None,
+        help="Start date (YYYY-MM-DD). Transactions before this date are excluded.",
+    )
+    _ = parser.add_argument(
+        "--end", dest="end_date", default=None,
+        help="End date (YYYY-MM-DD). Transactions after this date are excluded.",
+    )
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
-    main()
+    args = _parse_args()
+    main(start_date=args.start_date, end_date=args.end_date)

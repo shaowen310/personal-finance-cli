@@ -6,7 +6,7 @@ Shared **IR (Intermediate Representation) schema** data models for the
 This package defines the structured data types that all bank-statement
 extractors produce and all downstream consumers read — independent of any
 source PDF layout. It is the contract between `pfa-parser` (which extracts
-data) and the consolidation / categorization / analysis packages (which
+data) and the consolidation and analysis packages (which
 consume it). It has **no third-party dependencies** and is the leaf of the
 dependency graph.
 

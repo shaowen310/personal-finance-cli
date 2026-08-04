@@ -1,31 +1,31 @@
 # pfa-analysis
 
-Analyse personal-finance **balance sheet** and **cash flow** from
-bank-statement JSON. Produces an executive summary, balance sheet (cash + time
-deposits + investments, per currency), a cash-flow statement reconciled to the
-balance change, key observations, and caveats.
+Transaction categorization, balance-sheet analysis, and cash-flow reporting for
+`personal-finance-cli`. Produces a single **finance report** (Markdown) from a
+consolidated IR JSON.
 
-This package is the final stage of the `personal-finance-cli` pipeline. It
-consumes the consolidated IR JSON from
-[`pfa-ir-consolidator`](../pfa-ir-consolidator) (or a single `.ir.json` / a
-simple default schema) and renders an SGD-denominated Markdown report. The
-original `personal-finance-analysis` skill has been absorbed into this package.
+This package is the final stage of the pipeline. It consumes the consolidated
+IR JSON from [`pfa-ir-consolidator`](../pfa-ir-consolidator) and a rules file
+(`categories.yaml`), then renders an SGD-denominated report. The former
+`pfa-categorize` and `personal-finance-analysis` packages have been merged into
+this package.
 
 ## What it does
 
+- **Auto-categorization** — rule-based transaction categorization via
+  `categories.yaml` (description/amount/account patterns with regex support).
 - **Balance sheet** — assets (cash, time deposits, investments) and liabilities
   (credit-card balances), per currency, with an account-level drill-down that
   reconciles to the totals.
-- **Cash-flow statement** — classified only as **Income / Expense / Transfer In
-  / Transfer Out** (the minimum needed for an honest cash-flow statement; this
-  package does *not* do merchant-level categorization — that's
-  [`pfa-categorize`](../pfa-categorize)).
-- **Reconciliation** — verifies `balance_change == net_change_cash` to within
-  $0.005 and reports whether it ties out.
+- **Cash-flow statement** — per-currency income, expense, transfer in, and
+  transfer out, reconciled to the balance change.
+- **Income / Expense / Transfer breakdowns** — per-category drill-down tables
+  with individual transaction details.
+- **Categorization summary** — Class × Category counts with coverage
+  percentage.
 - **FX conversion** — converts every currency to SGD-equivalent using
   period-end rates from the Frankfurter API via the shared `pfa-fx` package
-  (ECB data, free, keyless), with
-  graceful degradation if the network is unavailable.
+  (ECB data, free, keyless), with graceful degradation.
 - **Sign conventions** — handles credit-card accounts where a *positive* amount
   is a charge (debit), and normal accounts where negative is a debit.
 
@@ -47,8 +47,7 @@ pip install -e packages/pfa-ir-consolidator
 pip install -e packages/pfa-analysis
 ```
 
-Requires Python >= 3.12, plus `pfa-ir-schema`. FX uses the standard library
-(`urllib`) — no extra dependency.
+Requires Python >= 3.12, plus `pyyaml`.
 
 ## Usage
 
@@ -65,9 +64,11 @@ python -m pfa_analysis.analyze consolidated.ir.json output_dir/
 python -m pfa_analysis.analyze --demo
 ```
 
-The report contains: **Executive Summary**, **Balance Sheet** (per currency,
-with drill-down), **Cash Flow Statement** (per currency, reconciled to balance),
-**Key Observations**, and **Notes & Caveats**.
+The report contains: **Executive Summary**, **Categorization Summary**,
+**Balance Sheet** (per currency, with drill-down), **Cash Flow Statement**
+(per currency, reconciled), **Income Breakdown**, **Expense Breakdown**,
+**Transfer Breakdown**, **Key Observations**, **FX Rates Reference**, and
+**Notes & Caveats**.
 
 ### Programmatic API
 
@@ -77,49 +78,83 @@ from pfa_analysis import (
     build_dashboard_json, classify_cash_flow,
     render_report, convert_to_sgd,
 )
-from pfa_analysis.analyze import load_statement
+from pfa_analysis.analyze import (
+    load_statement, render_consolidated_report,
+    build_income_expense_drilldowns, build_transfer_drilldown,
+)
 
-meta, txns = load_statement(path)            # auto-detect schema
+# Analysis
+meta, txns = load_statement(path)                 # auto-detect schema
 result = analyze_statement(raw, meta, txns, path)
-md = render_report(result)                    # -> Markdown string
+md = render_report(result)                        # -> Markdown string
+
+# Full report with categorization
+md = render_consolidated_report(
+    consolidated_path, categories_path,
+    start_date="2026-06-01", end_date="2026-06-15",
+)
+
+# Categorization
+from pfa_analysis.categorize import categorize
+result = categorize(ir_path, rules_path, output_path)
 ```
 
 Key functions:
 
-- `load_statement(path)` — load + normalize to `(meta, list[Txn])`, auto-detecting
-  consolidated / `.ir.json` / default schema.
-- `compute_metrics(txns, meta, ccy, opening_override=None, closing_override=None)`
-  — per-currency income, expense, transfers, net operating, savings rate,
-  opening/closing, reconciliation flag.
+- `load_statement(path, start_date, end_date)` — load + normalize to
+  `(meta, list[Txn])`, auto-detecting consolidated / `.ir.json` / default
+  schema. Supports date-range filtering.
+- `compute_metrics(txns, meta, ccy, ...)` — per-currency income, expense,
+  transfers, net operating, savings rate, opening/closing, reconciliation flag.
+  Supports `use_txn_balances` mode for date-filtered statements.
 - `build_assets(meta, metrics_by_ccy)` — per-currency cash / time deposits /
   investments / liabilities.
-- `classify_cash_flow(txn)` — `Income` / `Expense` / `Transfer In` / `Transfer Out`.
-- `convert_to_sgd(amount, currency, fx_rates)` — SGD conversion (returns `None`
-  if FX unavailable).
+- `classify_cash_flow(txn)` — `Income` / `Expense` / `Transfer In` /
+  `Transfer Out`.
+- `convert_to_sgd(amount, currency, fx_rates)` — SGD conversion.
 - `build_dashboard_json(...)` — structured dashboard payload for UIs.
+- `categorize(ir_path, rules_path, output_path)` — rule-based transaction
+  categorization, outputs `categories.json`.
+- `build_income_expense_drilldowns(path, categories_path, ...)` — category-level
+  drilldown for income and expense.
+- `build_transfer_drilldown(path, categories_path, ...)` — category-level
+  drilldown for transfers.
+
+## Categorization rules
+
+Rules are defined in `references/categories.yaml`. Each rule specifies:
+
+```yaml
+rules:
+  - category: "Expense: Dining"
+    description_pattern: "(?i).*mcdonald.*|.*kfc.*"
+    min_amount: 0
+    max_amount: 500
+    account_pattern: ""
+```
 
 ## FX & caveats
 
 - FX rates come from `https://api.frankfurter.dev/v1` (base SGD), via the
-  shared `pfa-fx` package, priced at the
-  statement period-end date (supports historical dates). If the fetch fails, the
-  report degrades gracefully and notes the limitation — it never crashes.
-- Reports always carry a **Notes & Caveats** section (e.g. missing balances,
-  unknown currencies, FX-unavailable) so figures are interpretable.
+  shared `pfa-fx` package, priced at the statement period-end date. If the
+  fetch fails, the report degrades gracefully.
+- Reports always carry a **Notes & Caveats** section.
 
 ## Repo layout
 
 ```
 pfa-analysis/
-├── pyproject.toml    # hatchling build; depends on pfa-ir-schema, pfa-fx
+├── pyproject.toml     # hatchling build; depends on pfa-ir-schema, pfa-fx, pyyaml
+├── references/
+│   └── categories.yaml  # auto-categorization rules
 ├── tests/
 └── src/
     └── pfa_analysis/
-        ├── __init__.py   # analyze_statement, compute_metrics, build_assets,
-        │                 #   build_dashboard_json, classify_cash_flow,
-        │                 #   render_report, convert_to_sgd, fmt
-        ├── analyze.py    # schema loading, metrics, balance sheet, FX fetch
-        └── render_md.py  # Markdown report renderer (FX_BASE = "SGD")
+        ├── __init__.py       # analyze_statement, compute_metrics, build_assets, ...
+        ├── analyze.py        # schema loading, metrics, balance sheet, drilldowns, FX
+        ├── categorize.py     # rule-based transaction auto-categorization
+        ├── categorize_ir.py  # consolidated IR parser for categorization
+        └── render_md.py      # Markdown report renderer (FX_BASE = "SGD")
 ```
 
 ## License

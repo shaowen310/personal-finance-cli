@@ -1,6 +1,8 @@
 # Personal Finance CLI
 
-A personal finance analysis CLI tool (`pfa`) that connects bank statement parsing, IR data consolidation, transaction categorization, and financial analysis into a single workflow.
+A personal finance analysis CLI tool (`pfa`) that connects bank statement
+parsing, IR data consolidation, transaction categorization, and financial
+analysis into a single workflow.
 
 Supported banks: **DBS/POSB**, **OCBC**, **UOB**, **ICBC** (Singapore).
 
@@ -10,10 +12,9 @@ Supported banks: **DBS/POSB**, **OCBC**, **UOB**, **ICBC** (Singapore).
 packages/
 ├── pfa-ir-schema/         # Shared IR data models (Account, Transaction, etc.)
 ├── pfa-parser/            # Bank statement PDF parser (detect → extract → IR)
-├── pfa-fx/                # FX rate retrieval & SGD conversion (leaf, stdlib-only)
+├── pfa-fx/                # FX rate retrieval & SGD conversion (stdlib-only)
 ├── pfa-ir-consolidator/   # IR data consolidation & transfer detection
-├── pfa-categorize/        # Transaction auto-categorization
-└── pfa-analysis/          # Financial analysis & reporting engine
+└── pfa-analysis/          # Categorization, financial analysis & reporting
 apps/
 └── pfa-cli/               # CLI entry point + workflow orchestration
 ```
@@ -39,18 +40,32 @@ pfa --help
 | `pfa analyze -m <YYYY-MM>` | Run financial analysis for a given month |
 | `pfa run --full` | Execute the full pipeline |
 
+## Pipeline
+
+```bash
+# Full pipeline (all PDFs in tests/cache/)
+python tests/run_full_pipeline.py
+
+# Date-filtered range
+python tests/run_full_pipeline.py --start 2026-06-01 --end 2026-06-15
+```
+
+Outputs in `tests/outputs/`:
+- `*.ir.json` — per-bank parsed IR
+- `consolidated.ir.json` — merged & deduplicated IR
+- `categories.json` — transaction → category mapping
+- `finance_report.md` — balance sheet, cash flow, income/expense/transfer breakdowns
+
 ## Dependency Graph
 
 ```
-pfa-ir-schema          (shared data models, zero heavy deps)
+pfa-ir-schema          (shared data models)
     ↑
 pfa-parser             (PDF extraction, all SG bank support)
     ↑
 pfa-ir-consolidator    (merge & deduplicate IR, detect transfers)
     ↑
-pfa-categorize         (auto-categorize transactions)
-    ↑
-pfa-analysis           (financial reports & visualization)
+pfa-analysis           (categorization, financial reports & visualization)
     ↑
 pfa-cli                (CLI entry point)
 ```

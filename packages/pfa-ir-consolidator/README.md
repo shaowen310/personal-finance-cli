@@ -7,7 +7,7 @@ This package takes the per-statement `ParsedStatement` objects produced by
 [`pfa-parser`](../pfa-parser), merges them, detects internal transfers between
 accounts/banks, applies FX conversion, and renders a consolidated report. It is
 the middle stage of the `personal-finance-cli` pipeline (between `pfa-parser`
-and the categorize/analysis packages).
+and the analysis package).
 
 The original `bank-ir-consolidate` skill has been absorbed into this package.
 
@@ -21,8 +21,8 @@ The original `bank-ir-consolidate` skill has been absorbed into this package.
   math doesn't double-count.
 - **FX** — convert non-SGD balances to SGD-equivalent via live mid-market
   rates (with cache + fallback), never crashes on network failure.
-- **Category merge** — fold categorizer output (`categories.json`) back into
-  the consolidated IR.
+- **Category merge** — fold categorizer output (`categories.json`, produced
+  by `pfa-analysis`) back into the consolidated IR.
 - **Render** — emit a cross-bank Markdown summary (net position, per-account
   tables, FD records, investment holdings) with masking on by default.
 
@@ -125,7 +125,7 @@ out = to_json(consolidated)
 Helper entry points also available:
 
 - `export_model.export_render_model(ir, ...)` — serialize to the
-  `RenderModel` JSON consumed by the categorizer (no account-holder PII).
+  `RenderModel` JSON consumed by `pfa-analysis` categorization (no account-holder PII).
 - `merge_categories.merge_categories(ir, categories_json, ...)` — fold
   categorizer output back into the consolidated IR.
 - `render_model.build_render_model(ir, ...)` — build the in-memory render

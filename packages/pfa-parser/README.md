@@ -6,7 +6,7 @@ Markdown tables and a machine-readable IR JSON. No OCR, no manual cleanup.
 This package contains all PDF extraction logic and IR→Markdown rendering. It
 produces `pfa_ir_schema.ParsedStatement` objects (defined in the
 [`pfa-ir-schema`](../pfa-ir-schema) package) and is consumed by the
-consolidation, categorization, and analysis packages in the monorepo.
+consolidation and analysis packages in the monorepo.
 
 The original `sg_bank_pdf_parser` library has been absorbed into this package;
 its IR data models now live in `pfa-ir-schema`.
@@ -64,7 +64,14 @@ parser = SGBankPDFParser()
 if parser.supports_format("statement.pdf"):
     transactions = parser.parse("statement.pdf")
 
-# Or run the full pipeline (PDF -> IR -> MD) and get the ParsedStatement
+# Extract and post-process in one call (PDF → fully post-processed IR)
+from pfa_parser.extractors.dbs_extractor import DBSExtractor
+extractor = DBSExtractor()
+statement: ParsedStatement = extractor.to_ir("statement.pdf")
+# to_ir() runs _parse() + postprocess_statement() automatically
+# (meta validation, FD running balances, account balances, FD-CA linking, etc.)
+
+# Or run the full pipeline (PDF → IR → MD) and get the ParsedStatement
 from pfa_parser.convert_statement import run
 statement: ParsedStatement = run("statement.pdf")
 print(statement.statement_meta.bank, statement.statement_meta.family)
@@ -72,6 +79,9 @@ print(statement.statement_meta.bank, statement.statement_meta.family)
 
 `detect_type` returns a `(bank, family)` tuple, e.g.
 `("dbs", "consolidated")`, `("ocbc", "card")`, `("uob", "one")`.
+
+Extractors implement `_parse()` for raw extraction; `BaseExtractor.to_ir()`
+wraps it with the standard `postprocess_statement()` pipeline.
 
 ## Masking
 
