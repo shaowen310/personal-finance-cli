@@ -122,53 +122,74 @@ def render_report(result: dict[str, Any], consolidated: bool = False,
     # ---- 2. Balance Sheet ----------------------------------------------------
     liabilities = assets.get("liabilities", {})
     out.append("## 2. Balance Sheet\n")
-    if use_fx:
-        assert fx_rates is not None  # guaranteed by use_fx
-        out.append("| Currency | Cash | Time Deposits | Investments | Liabilities | Net Position | SGD Equivalent |")
-        out.append("|---|---:|---:|---:|---:|---:|---:|")
-    else:
-        out.append("| Currency | Cash | Time Deposits | Investments | Liabilities | Net Position |")
-        out.append("|---|---:|---:|---:|---:|---:|")
     ccies = sorted(
         c for c in (set(assets["cash"]) | set(assets["time_deposits"]) | set(assets["investments"]) | set(liabilities))
         if (assets["cash"].get(c, 0.0) + assets["time_deposits"].get(c, 0.0)
             + assets["investments"].get(c, 0.0) + liabilities.get(c, 0.0)) != 0.0
     )
-    tot_cash = tot_td = tot_inv = tot_lia = tot_np = 0.0
-    tot_sgd = tot_cash_sgd = tot_td_sgd = tot_inv_sgd = tot_lia_sgd = tot_np_sgd = 0.0
+
+    # Transposed layout: asset/liability types as rows, currencies as columns,
+    # final column = SGD Equivalent (native-currency sum × rate per row).
+    rows: list[tuple[str, dict[str, float], float | None, bool]] = [
+        # (label, {ccy: native_value}, multiplier_for_liability)
+        ("Cash", assets["cash"], None, False),
+        ("Time Deposits", assets["time_deposits"], None, False),
+        ("Investments", assets["investments"], None, False),
+        ("Liabilities", liabilities, None, True),
+        ("Net Position", {}, None, False),
+    ]
+
+    # Build the "Net Position" row: Cash + TD + Inv - Liab per currency.
+    net_by_ccy: dict[str, float] = {}
     for c in ccies:
-        csh = assets["cash"].get(c, 0.0)
-        td = assets["time_deposits"].get(c, 0.0)
-        iv = assets["investments"].get(c, 0.0)
-        lia = liabilities.get(c, 0.0)
-        np_ = csh + td + iv - lia
-        tot_cash += csh; tot_td += td; tot_inv += iv; tot_lia += lia; tot_np += np_
-        if use_fx:
-            assert fx_rates is not None  # guaranteed by use_fx
-            sgd_csh = convert_to_sgd(csh, c, fx_rates) or 0.0
-            sgd_td = convert_to_sgd(td, c, fx_rates) or 0.0
-            sgd_iv = convert_to_sgd(iv, c, fx_rates) or 0.0
-            sgd_lia = convert_to_sgd(lia, c, fx_rates) or 0.0
-            sgd_np = sgd_csh + sgd_td + sgd_iv - sgd_lia
-            tot_cash_sgd += sgd_csh; tot_td_sgd += sgd_td
-            tot_inv_sgd += sgd_iv; tot_lia_sgd += sgd_lia
-            tot_np_sgd += sgd_np
-            tot_sgd += sgd_np
-            out.append(f"| {c} | {fmt(csh)} | {fmt(td)} | {fmt(iv)} | {fmt(lia)} | {fmt(np_)} | {fmt(sgd_np)} |")
-        else:
-            out.append(f"| {c} | {fmt(csh)} | {fmt(td)} | {fmt(iv)} | {fmt(lia)} | {fmt(np_)} |")
+        net_by_ccy[c] = (assets["cash"].get(c, 0.0) + assets["time_deposits"].get(c, 0.0)
+                         + assets["investments"].get(c, 0.0) - liabilities.get(c, 0.0))
+
+    # Build the header.
+    header_parts = ["| Asset / Liability"]
+    for c in ccies:
+        header_parts.append(c)
     if use_fx:
-        out.append(
-            f"| **Total (SGD)** | **{fmt(tot_cash_sgd)}** | **{fmt(tot_td_sgd)}** | "
-            + f"**{fmt(tot_inv_sgd)}** | **{fmt(tot_lia_sgd)}** | **{fmt(tot_np_sgd)}** | **{fmt(tot_sgd)}** |\n"
-        )
-    elif len(ccies) > 1:
-        out.append(
-            "| **Total** | *n/a* | *n/a* | *n/a* | *n/a* | *n/a* | "
-            + "(cross-currency sum not meaningful without FX rates)\n"
-        )
-    else:
-        out.append(f"| **Total** | **{fmt(tot_cash)}** | **{fmt(tot_td)}** | **{fmt(tot_inv)}** | **{fmt(tot_lia)}** | **{fmt(tot_np)}** |\n")
+        assert fx_rates is not None
+        header_parts.append("SGD Eq.")
+    out.append(" | ".join(header_parts) + " |")
+    sep_parts = ["|---"]
+    for _ in ccies:
+        sep_parts.append("---:")
+    if use_fx:
+        sep_parts.append("---:")
+    out.append(" | ".join(sep_parts) + " |")
+
+    # Data rows.
+    tot_inv = 0.0
+    for label, by_ccy, _mult, is_lia in rows:
+        vals: list[str] = [label]
+        row_sgd = 0.0
+        row_native = 0.0
+        for c in ccies:
+            if label == "Net Position":
+                v = net_by_ccy.get(c, 0.0)
+            else:
+                v = by_ccy.get(c, 0.0)
+            # Liabilities reduce net worth — display as negative.
+            if is_lia:
+                v = -v
+            vals.append(fmt(v))
+            row_native += v
+            if use_fx and not is_lia:
+                s = convert_to_sgd(v, c, fx_rates) or 0.0
+                row_sgd += s
+            elif use_fx and is_lia:
+                s = convert_to_sgd(v, c, fx_rates) or 0.0
+                row_sgd += s
+        if label == "Investments":
+            tot_inv = row_native
+        if use_fx:
+            vals.append(fmt(row_sgd))
+        out.append(" | ".join(vals) + " |")
+
+    if use_fx:
+        out.append("")  # blank line after table
     if not mbc:
         out.append("_No transactions \u2014 cash-flow statement below is not applicable._\n")
 
@@ -206,17 +227,17 @@ def render_report(result: dict[str, Any], consolidated: bool = False,
                 if not bvals:
                     continue
                 out.append(f"**{bucket}**\n")
-                out.append("| Institution | Account | Type | Native Value | Derivation | SGD Eq |")
-                out.append("|---|---|---|---:|---|---:|")
+                out.append("| Institution | Account | Type | Derivation | CCY | OC | SGD Eq. |")
+                out.append("|---|---|---|---|---|---:|---:|")
                 bsum = 0.0
                 bsum_sgd = 0.0
                 for i, a, t, d, v in sorted(bvals, key=lambda x: -x[4]):
                     se = convert_to_sgd(v, ccy, fx_rates)
-                    out.append(f"| {i} | {a} | {t} | {fmt(v)} | {d} | {fmt(se)} |")
+                    out.append(f"| {i} | {a} | {t} | {d} | {ccy} | {fmt(v)} | {fmt(se)} |")
                     bsum += v
                     bsum_sgd += se if se is not None else 0.0
                 out.append(
-                    f"| **{bucket} subtotal** | | | **{fmt(bsum)}** | | **{fmt(bsum_sgd)}** |"
+                    f"| **{bucket} subtotal** | | | | | **{fmt(bsum)}** | **{fmt(bsum_sgd)}** |"
                 )
                 out.append("")
             out.append("")
