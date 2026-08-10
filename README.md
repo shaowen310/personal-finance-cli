@@ -37,7 +37,8 @@ pfa --help
 | Command | Description |
 |---------|-------------|
 | `pfa parse -i <file>` | Parse a bank statement PDF |
-| `pfa analyze -m <YYYY-MM>` | Run financial analysis for a given month |
+| `pfa analyze -m <YYYYMM>` | Run financial analysis for a given month |
+| `pfa analyze -s <YYYYMMDD\|YYYYMM> -e <YYYYMMDD\|YYYYMM>` | Run analysis for a date range |
 | `pfa run --full` | Execute the full pipeline |
 
 ## Pipeline
@@ -46,8 +47,11 @@ pfa --help
 # Full pipeline (all PDFs in tests/cache/)
 python tests/run_full_pipeline.py
 
-# Date-filtered range
-python tests/run_full_pipeline.py --start 2026-06-01 --end 2026-06-15
+# Date-filtered range (YYYYMMDD or YYYYMM format)
+python tests/run_full_pipeline.py -s 20260601 -e 20260615
+
+# Whole month (YYYYMM → -s uses 1st, -e uses last day)
+python tests/run_full_pipeline.py -s 202606 -e 202606
 ```
 
 Outputs in `tests/outputs/`:

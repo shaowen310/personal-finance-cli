@@ -7,13 +7,12 @@ Steps:
   4. Generate markdown reports from consolidated.ir.json + categories.json
 
 Usage:
-    python tests/run_full_pipeline.py [--start DATE] [--end DATE]
+    python tests/run_full_pipeline.py [-s YYYYMMDD|YYYYMM] [-e YYYYMMDD|YYYYMM]
 """
 
 from __future__ import annotations
 
 import argparse
-import datetime
 import json
 import os
 import shutil
@@ -34,6 +33,7 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from pfa_ir_consolidator.consolidate import consolidate_statements  # noqa: E402
 from pfa_analysis.categorize import categorize  # noqa: E402
+from pfa_cli.dates import parse_start_date, parse_end_date  # noqa: E402
 
 
 CACHE_DIR = REPO_ROOT / "tests" / "cache"
@@ -237,33 +237,20 @@ def main(start_date: str | None = None, end_date: str | None = None) -> None:
     print(f"\nDone — outputs in {OUTPUT_DIR}")
 
 
-def _normalize_date(raw: str | None) -> str | None:
-    """Normalize a user-supplied date string to YYYY-MM-DD.
+def _parse_start_date(raw: str | None) -> str | None:
+    """argparse type for --start; delegates to shared pfa_cli.dates."""
+    try:
+        return parse_start_date(raw)
+    except ValueError as e:
+        raise argparse.ArgumentTypeError(str(e))
 
-    Accepted formats:
-      - YYYY-MM-DD  (passed through)
-      - YYYYMMDD    (compact, no separator)
-      - MMDD        (current year assumed)
-    """
-    if raw is None:
-        return None
-    raw = raw.strip()
-    if not raw:
-        return None
 
-    if len(raw) == 10 and raw[4] == "-" and raw[7] == "-":
-        return raw  # YYYY-MM-DD
-
-    if len(raw) == 8 and raw.isdigit():
-        return f"{raw[:4]}-{raw[4:6]}-{raw[6:8]}"  # YYYYMMDD
-
-    if len(raw) == 4 and raw.isdigit():
-        year = str(datetime.date.today().year)
-        return f"{year}-{raw[:2]}-{raw[2:4]}"  # MMDD
-
-    raise argparse.ArgumentTypeError(
-        f"Invalid date '{raw}'. Expected YYYY-MM-DD, YYYYMMDD, or MMDD."
-    )
+def _parse_end_date(raw: str | None) -> str | None:
+    """argparse type for --end; delegates to shared pfa_cli.dates."""
+    try:
+        return parse_end_date(raw)
+    except ValueError as e:
+        raise argparse.ArgumentTypeError(str(e))
 
 
 def _parse_args() -> argparse.Namespace:
@@ -271,14 +258,16 @@ def _parse_args() -> argparse.Namespace:
         description="Run the full PFA pipeline: parse → consolidate → categorize → report.",
     )
     _ = parser.add_argument(
-        "--start", dest="start_date", default=None, type=_normalize_date,
-        help="Start date (YYYY-MM-DD, YYYYMMDD, or MMDD). "+
-             "MMDD uses the current year. Transactions before this date are excluded.",
+        "-s", "--start", dest="start_date", default=None, type=_parse_start_date,
+        help="Start date (YYYYMMDD or YYYYMM). "
+             +"YYYYMM uses the 1st of the month. "
+             +"Transactions before this date are excluded.",
     )
     _ = parser.add_argument(
-        "--end", dest="end_date", default=None, type=_normalize_date,
-        help="End date (YYYY-MM-DD, YYYYMMDD, or MMDD). "+
-             "MMDD uses the current year. Transactions after this date are excluded.",
+        "-e", "--end", dest="end_date", default=None, type=_parse_end_date,
+        help="End date (YYYYMMDD or YYYYMM). "
+             +"YYYYMM uses the last day of the month. "
+             +"Transactions after this date are excluded.",
     )
     return parser.parse_args()
 
