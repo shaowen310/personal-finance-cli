@@ -462,7 +462,7 @@ def build_assets(meta: dict[str, Any], metrics_by_ccy: dict[str, dict[str, Any]]
         for ccy, bal in cc_balances.items():
             if bal > 0:
                 liabilities[ccy] += bal
-    else:
+    elif not meta.get("account_summary"):
         for ccy, m in metrics_by_ccy.items():
             if m["closing"] is not None:
                 cash[ccy] += m["closing"]
@@ -489,6 +489,42 @@ def build_assets(meta: dict[str, Any], metrics_by_ccy: dict[str, dict[str, Any]]
             inv["SGD"] += b
 
     return {"cash": dict(cash), "time_deposits": dict(time_dep), "investments": dict(inv), "liabilities": dict(liabilities)}
+
+
+def _assert_drilldown_reconciles(assets: dict[str, dict[str, float]],
+                                  drilldown: list[dict[str, Any]]) -> None:
+    """Assert that drill-down subtotals match the Balance Sheet totals.
+
+    Compares per-currency, per-bucket sums from the drill-down rows against
+    the corresponding values in *assets*. Raises ``AssertionError`` with a
+    descriptive message on mismatch — this catches double-counting bugs in
+    ``build_assets`` and schema drift between the two code paths.
+    """
+    _BUCKET_MAP = {
+        "Cash": "cash",
+        "Time Deposit": "time_deposits",
+        "Investment": "investments",
+        "Liability": "liabilities",
+    }
+    dd_totals: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
+    for row in drilldown:
+        bucket = row.get("bucket", "")
+        ccy = row.get("currency", "")
+        val = row.get("native_value", 0.0)
+        if bucket in _BUCKET_MAP:
+            dd_totals[_BUCKET_MAP[bucket]][ccy] += val
+
+    for asset_key in ("cash", "time_deposits", "investments", "liabilities"):
+        asset_by_ccy = assets.get(asset_key, {})
+        dd_by_ccy = dd_totals.get(asset_key, {})
+        all_ccies = sorted(set(list(asset_by_ccy) + list(dd_by_ccy)))
+        for ccy in all_ccies:
+            asset_val = asset_by_ccy.get(ccy, 0.0)
+            dd_val = dd_by_ccy.get(ccy, 0.0)
+            assert abs(asset_val - dd_val) < 0.005, (
+                f"Balance Sheet / drill-down mismatch for {asset_key} {ccy}: "
+                f"Balance Sheet={asset_val:.2f}, Drill-Down={dd_val:.2f}"
+            )
 
 
 def build_balance_sheet_drilldown(raw: dict[str, Any]) -> list[dict[str, Any]]:
@@ -658,6 +694,7 @@ def _analyze_consolidated(raw: dict[str, Any], meta: dict[str, Any],
 
     assets = build_assets(meta, metrics_by_ccy, cc_balances=cc_balances)
     drilldown = build_balance_sheet_drilldown(raw)
+    _assert_drilldown_reconciles(assets, drilldown)
     return {
         "meta": meta, "metrics_by_ccy": metrics_by_ccy, "assets": assets,
         "drilldown": drilldown, "has_txns": bool(txns), "source": path.name,
@@ -699,6 +736,7 @@ def analyze_statement(raw: dict[str, Any], meta: dict[str, Any],
 
     assets = build_assets(meta, metrics_by_ccy, cc_balances=cc_balances)
     drilldown = build_balance_sheet_drilldown(raw)
+    _assert_drilldown_reconciles(assets, drilldown)
     return {
         "meta": meta, "metrics_by_ccy": metrics_by_ccy, "assets": assets,
         "drilldown": drilldown, "has_txns": bool(txns), "source": path.name,

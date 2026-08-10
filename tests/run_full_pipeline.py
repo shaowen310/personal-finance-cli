@@ -38,6 +38,7 @@ from pfa_cli.dates import parse_start_date, parse_end_date  # noqa: E402
 
 CACHE_DIR = REPO_ROOT / "tests" / "cache"
 OUTPUT_DIR = REPO_ROOT / "tests" / "outputs"
+IR_DIR = OUTPUT_DIR / "ir"
 RULES_PATH = REPO_ROOT / "packages" / "pfa-analysis" / "references" / "categories.yaml"
 
 
@@ -62,7 +63,7 @@ def _reset_output_dir() -> None:
     if OUTPUT_DIR.exists():
         _clear_readonly(OUTPUT_DIR)
         shutil.rmtree(OUTPUT_DIR, ignore_errors=True)
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    IR_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def _step1_parse_pdfs(pdf_paths: list[Path]) -> bool:
@@ -72,7 +73,7 @@ def _step1_parse_pdfs(pdf_paths: list[Path]) -> bool:
     for pdf_path in pdf_paths:
         print(f"  Parsing: {pdf_path.name} …", end=" ", flush=True)
         try:
-            ir_path = OUTPUT_DIR / f"{pdf_path.stem}.ir.json"
+            ir_path = IR_DIR / f"{pdf_path.stem}.ir.json"
             with pdfplumber.open(str(pdf_path)) as pdf:
                 bank, family = detect_type(pdf)
             ExtractorCls = get_extractor(bank, family)
@@ -96,7 +97,7 @@ def _step1_parse_pdfs(pdf_paths: list[Path]) -> bool:
 
 def _step2_consolidate() -> Path | None:
     """Consolidate all .ir.json into consolidated.ir.json."""
-    ir_paths = sorted(OUTPUT_DIR.glob("*.ir.json"))
+    ir_paths = sorted(IR_DIR.glob("*.ir.json"))
     if not ir_paths:
         print("  No .ir.json files found — skipping consolidation.")
         return None

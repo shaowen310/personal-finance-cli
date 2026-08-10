@@ -432,10 +432,12 @@ def parse_uob_portfolio(pdf: Any):
                     continue
                 # Capture: currency, credit_line, interest_earned,
                 # interest_charged, balance.
-                ccy_tokens = [w["text"] for w in ln
-                              if 195 <= w["x0"] <= 215 and w["text"] in {"S", "G", "D"}]
-                if len(ccy_tokens) == 3 and "".join(ccy_tokens) == "SGD":
-                    d["currency"] = "SGD"
+                # Currency column (x0 ≈ 197, aligns with "Currency" header).
+                ccy_word = next((w["text"] for w in ln if 195 <= w["x0"] <= 230), None)
+                if ccy_word:
+                    d["currency"] = ccy_word
+                elif not d["currency"]:
+                    d["currency"] = "SGD"  # UOB SG portfolio: default to SGD
                 for w in ln:
                     if not is_bank_num(w["text"]):
                         continue

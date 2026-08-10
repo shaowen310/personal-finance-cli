@@ -55,7 +55,7 @@ python tests/run_full_pipeline.py -s 202606 -e 202606
 ```
 
 Outputs in `tests/outputs/`:
-- `*.ir.json` — per-bank parsed IR
+- `ir/*.ir.json` — per-bank parsed IR
 - `consolidated.ir.json` — merged & deduplicated IR
 - `categories.json` — transaction → category mapping
 - `finance_report.md` — balance sheet, cash flow, income/expense/transfer breakdowns
