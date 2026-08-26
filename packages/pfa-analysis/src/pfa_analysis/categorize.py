@@ -21,7 +21,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from pfa_analysis.categorize_ir import parse_ir
+from pfa_analysis.txn_ir import parse_ir
 
 # ---------------------------------------------------------------------------
 # Data model

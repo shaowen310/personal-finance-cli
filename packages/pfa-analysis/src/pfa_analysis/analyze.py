@@ -1163,5 +1163,3 @@ def _load_ir_with_txn_id(path: Path,
             "is_internal_transfer": bool(txn.get("is_internal_transfer", False)),
         })
     return meta, rows
-
-

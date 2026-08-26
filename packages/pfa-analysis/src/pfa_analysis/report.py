@@ -28,7 +28,7 @@ from pfa_analysis.analyze import (
     parse_date_to_iso,
 )
 from pfa_analysis.dashboard import build_dashboard_json
-from pfa_analysis.render_md import fmt, render_report
+from pfa_analysis.render_md import render_report
 
 
 def demo_statements() -> list[tuple[dict[str, Any], list[Any]]]:
