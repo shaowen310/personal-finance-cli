@@ -1,6 +1,37 @@
 {
-  "include": ["packages", "apps", "tests"],
-  "exclude": ["**/__pycache__", "**/*.pyc"],
+  // Source roots to analyze.
+  "include": [
+    "packages",
+    "apps",
+    "tests"
+  ],
+  // Keep caches, build artifacts, and virtualenvs out of the analysis set.
+  // "**/*.pyc" is intentionally omitted: pyright only analyzes .py/.pyi
+  // files, so that pattern would be dead configuration.
+  "exclude": [
+    "**/__pycache__",
+    "**/.pytest_cache",
+    "**/.mypy_cache",
+    "**/.ruff_cache",
+    "**/.tox",
+    "**/.nox",
+    "**/.venv",
+    "**/venv",
+    "**/build",
+    "**/dist",
+    "**/*.egg-info",
+    "**/node_modules",
+    "**/.*"
+  ],
+  // Every package declares requires-python = ">=3.12", so pin the analysis
+  // target to the minimum supported interpreter for consistent results.
+  "pythonVersion": "3.12",
+  // Explicit baseline so effective strictness stays stable across pyright
+  // upgrades (the framework default is "standard").
+  "typeCheckingMode": "standard",
+  // Monorepo: each package uses a hatch src/ layout, so expose every
+  // package root to let cross-package imports (and package tests) resolve
+  // without installing the packages into an interpreter.
   "executionEnvironments": [
     {
       "root": ".",
@@ -14,6 +45,9 @@
       ]
     }
   ],
+  // Deliberate relaxations: the project depends on pandas / pdfplumber /
+  // click, which ship little typing metadata. Keep them permissive and
+  // tighten gradually as type coverage improves.
   "reportImplicitRelativeImport": "none",
   "reportTypedDictNotRequiredAccess": "none",
   "reportAny": "none",
