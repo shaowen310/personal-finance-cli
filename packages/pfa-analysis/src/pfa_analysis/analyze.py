@@ -527,7 +527,9 @@ def _assert_drilldown_reconciles(assets: dict[str, dict[str, float]],
             )
 
 
-def build_balance_sheet_drilldown(raw: dict[str, Any]) -> list[dict[str, Any]]:
+def build_balance_sheet_drilldown(raw: dict[str, Any],
+                                  cc_balances: dict[str, float] | None = None,
+                                  use_txn_balances: bool = False) -> list[dict[str, Any]]:
     """Account-level breakdown that feeds the Balance Sheet Drill-Down section.
 
     Mirrors the bucket assignment in :func:`build_assets` exactly so the
@@ -560,6 +562,13 @@ def build_balance_sheet_drilldown(raw: dict[str, Any]) -> list[dict[str, Any]]:
             acc = acct.get("account_no", "")
             cb = parse_num(acct.get("closing_balance"))
             if at in _LIABILITY_ACCOUNT_TYPES:
+                if use_txn_balances and cc_balances:
+                    # Use the cutoff-aware balance_after, matching build_assets.
+                    bal = cc_balances.get(ccy)
+                    if bal is not None:
+                        _add(ccy, inst, acc, at, "Liability", bal,
+                             "balance_after as of cutoff (credit-card debt)")
+                        continue
                 if cb is not None:
                     _add(ccy, inst, acc, at, "Liability", abs(cb),
                          "account closing_balance (credit-card debt)")
@@ -693,7 +702,8 @@ def _analyze_consolidated(raw: dict[str, Any], meta: dict[str, Any],
         )
 
     assets = build_assets(meta, metrics_by_ccy, cc_balances=cc_balances)
-    drilldown = build_balance_sheet_drilldown(raw)
+    drilldown = build_balance_sheet_drilldown(raw, cc_balances=cc_balances,
+                                             use_txn_balances=use_txn_balances)
     _assert_drilldown_reconciles(assets, drilldown)
     return {
         "meta": meta, "metrics_by_ccy": metrics_by_ccy, "assets": assets,
@@ -735,7 +745,8 @@ def analyze_statement(raw: dict[str, Any], meta: dict[str, Any],
             cc_balances[ccy] = bal
 
     assets = build_assets(meta, metrics_by_ccy, cc_balances=cc_balances)
-    drilldown = build_balance_sheet_drilldown(raw)
+    drilldown = build_balance_sheet_drilldown(raw, cc_balances=cc_balances,
+                                             use_txn_balances=use_txn_balances)
     _assert_drilldown_reconciles(assets, drilldown)
     return {
         "meta": meta, "metrics_by_ccy": metrics_by_ccy, "assets": assets,
