@@ -2,9 +2,9 @@ from .analyze import (
     analyze_statement,
     compute_metrics,
     build_assets,
-    build_dashboard_json,
     classify_cash_flow,
 )
+from .dashboard import build_dashboard_json
 from .render_md import render_report, convert_to_sgd, fmt
 
 __all__ = [

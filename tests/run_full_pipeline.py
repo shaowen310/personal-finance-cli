@@ -182,7 +182,7 @@ def _step4_render_report(
     # ── 4a. Balance Sheet & Cash Flow Report ───────────────────────────────
     print("  4a. Finance report …", end=" ", flush=True)
     try:
-        from pfa_analysis.analyze import render_consolidated_report
+        from pfa_analysis.report import render_consolidated_report
 
         md = render_consolidated_report(
             consolidated_path, categories_path,

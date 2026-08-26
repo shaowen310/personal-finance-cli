@@ -90,7 +90,7 @@ def analyze(month: str | None, start_date: str | None, end_date: str | None,
       pfa analyze -s 20260801 -e 20260810
       pfa analyze -s 202608 -e 202608
     """
-    from pfa_analysis.analyze import render_consolidated_report
+    from pfa_analysis.report import render_consolidated_report
 
     # Resolve input path
     if input_path:
