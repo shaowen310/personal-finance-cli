@@ -50,6 +50,7 @@ def get_renderer(bank: str, family: str):
 
 PARSER_NAME_TO_BANK_FAMILY: dict[str, tuple[str, str]] = {
     "dbs_sg": ("dbs", "consolidated"),
+    "dbs_txn_2013": ("dbs", "txn_2013"),
     "icbc_sg": ("icbc", "consolidated"),
     "ocbc_consolidated": ("ocbc", "consolidated"),
     "ocbc_card": ("ocbc", "card"),
@@ -105,19 +106,35 @@ def detect_type(pdf: PDFType) -> tuple[str, str]:
 
 
 def detect_dbs(pdf: PDFType) -> tuple[str, str] | None:
-    """Return ``("dbs", "consolidated")`` if page 0 carries DBS/POSB's rotated
-    left-margin banner, otherwise ``None``.
+    """Return ``("dbs", family)`` if the PDF is a DBS/POSB statement.
 
-    DBS/POSB prints a vertical (90°-rotated) banner down the left edge of
-    every page — the ``DBS Bank Ltd … POSB …`` strip. Because the text is
-    rotated, pdfplumber yields each word character-reversed (e.g. ``DBS`` ->
-    ``SBD``, ``POSB`` -> ``BSOP``). We collect the low-x words on page 0 and
-    look for that signature. No other supported bank prints rotated text in
-    the left margin, so this is a precise, bank-level signal.
+    Two distinct DBS layouts are recognised:
+
+    * ``txn_2013`` — older single-account savings statements (e.g. the
+      DBS REMIX eSAVINGS PLUS format) that print a non-rotated ``DBS Bank
+      Ltd`` letterhead, an ``As at <date>`` period line, and a transaction
+      table with separate WITHDRAWAL / DEPOSIT / BALANCE columns. These have
+      no rotated left-margin banner.
+    * ``consolidated`` — the current consolidated DBS/POSB statement, which
+      prints a vertical (90°-rotated) banner down the left edge of every page
+      (the ``DBS Bank Ltd … POSB …`` strip). Because the text is rotated,
+      pdfplumber yields each word character-reversed (e.g. ``DBS`` -> ``SBD``,
+      ``POSB`` -> ``BSOP``).
     """
+    full_text = ""
+    for page in pdf.pages:
+        full_text += "\n" + (page.extract_text() or "")
+
+    # Legacy single-account savings statement (no rotated banner).
+    legacy_markers = ("DBS Bank Ltd", "REMIX", "eSAVINGS", "As at")
+    if all(marker in full_text for marker in ("DBS Bank Ltd", "As at")) and any(
+        marker in full_text for marker in ("REMIX", "eSAVINGS")
+    ):
+        return ("dbs", "txn_2013")
+
+    # Current consolidated statement — rotated left-margin banner.
     page = pdf.pages[0]
     left_words = {w["text"] for w in page.extract_words() if w["x0"] < 25}
-    # Rotated forms of "DBS" and "POSB" in the left-margin banner.
     if "SBD" in left_words and "BSOP" in left_words:
         return ("dbs", "consolidated")
     return None

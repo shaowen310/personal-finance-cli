@@ -952,6 +952,7 @@ def icbc_ir_to_markdown(statement: ParsedStatement, *, do_mask: bool = True) -> 
 
 MD_RENDERER_REGISTRY: dict[tuple[str, str], Callable[..., str]] = {
     ("dbs", "consolidated"): dbs_ir_to_markdown,
+    ("dbs", "txn_2013"): dbs_ir_to_markdown,
     ("uob", "txn"): uob_txn_ir_to_markdown,
     ("uob", "one"): uob_one_ir_to_markdown,
     ("uob", "portfolio"): uob_portfolio_ir_to_markdown,

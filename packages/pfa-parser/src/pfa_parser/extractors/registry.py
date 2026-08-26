@@ -7,6 +7,7 @@ rendering without a manual if/elif chain.
 from __future__ import annotations
 
 from .dbs_extractor import DBSExtractor
+from .dbs_legacy_extractor import DBSTxn2013Extractor
 from .base import BaseExtractor
 from .icbc_extractor import ICBCExtractor
 from .ocbc_extractor import OCBCConsolidatedExtractor, OCRCCardExtractor
@@ -20,6 +21,7 @@ def _build_registry() -> dict[tuple[str, str], type[BaseExtractor]]:
     """Build the extractor registry (imports extractors on first call)."""
     return {
         ("dbs", "consolidated"): DBSExtractor,
+        ("dbs", "txn_2013"): DBSTxn2013Extractor,
         ("ocbc", "consolidated"):  OCBCConsolidatedExtractor,
         ("ocbc", "card"):        OCRCCardExtractor,
         ("icbc", "consolidated"):   ICBCExtractor,
