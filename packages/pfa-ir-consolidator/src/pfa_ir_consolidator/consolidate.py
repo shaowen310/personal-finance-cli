@@ -259,7 +259,7 @@ def consolidate_statements(
     return consolidated, total_txns_in, deduped, filtered
 
 
-def finalize_consolidated_ir(
+def embed_fx_rates(
     consolidated: Any,
     as_of: str | None = None,
 ) -> Any:
@@ -300,7 +300,7 @@ def finalize_consolidated_ir(
             source = fx.get("source", source)
             as_of = as_of or fx.get("date", "")
     except Exception as e:  # noqa: BLE001 - never block consolidation on FX failure
-        print(f"[WARN] finalize_consolidated_ir: FX fetch failed: {e}", file=sys.stderr)
+        print(f"[WARN] embed_fx_rates: FX fetch failed: {e}", file=sys.stderr)
 
     extras = dict(consolidated.extras or {})
     consolid = dict(extras.get("consolidation") or {})

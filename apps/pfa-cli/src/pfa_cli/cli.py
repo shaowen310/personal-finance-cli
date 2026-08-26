@@ -1,12 +1,33 @@
 """Personal Finance CLI entry point."""
 
+import sys
 from pathlib import Path
 
 import click
 
 from pfa_parser import SGBankPDFParser
+from pfa_ir_schema import from_json
+
+from pfa_ir_consolidator import (
+    consolidate_statements,
+    embed_fx_rates,
+    detect_inter_bank_transfers,
+    detect_intra_bank_transfers,
+    detect_currency_conversions,
+    detect_cc_payments,
+)
+from pfa_parser.postprocess import verify_txn_links
 
 from pfa_cli.dates import parse_month, parse_start_date, parse_end_date
+
+DEFAULT_MIN_IR_VERSION = "2026.4"
+
+
+def _version_ge(a: str, b: str) -> bool:
+    def _parts(v: str) -> list[int]:
+        return [int(x) for x in v.split(".") if x.isdigit()]
+
+    return _parts(a) >= _parts(b)
 
 
 @click.group()
@@ -140,3 +161,75 @@ def run(full: bool) -> None:
     """Run the full personal finance pipeline."""
     _ = full
     click.echo("Full pipeline execution — coming soon.")
+
+
+@cli.command()
+@click.argument("inputs", nargs=-1, required=True, type=click.Path(exists=True, dir_okay=False))
+@click.option("-o", "--out", "out_path", default="consolidated.ir.json",
+              help="Output IR JSON path (default: consolidated.ir.json)")
+@click.option("--min-ir-version", default=DEFAULT_MIN_IR_VERSION,
+              help="Minimum accepted ir_version")
+@click.option("--no-dedup", is_flag=True, help="Disable txn_id de-duplication")
+@click.option("--indent", type=int, default=2, help="JSON indent")
+def consolidate(inputs: tuple[str, ...], out_path: str, min_ir_version: str,
+                no_dedup: bool, indent: int) -> None:
+    """Consolidate multiple *.ir.json ParsedStatement files into one.
+
+    This command directly invokes the ``pfa_ir_consolidator`` library (the
+    same consolidation engine behind the standalone ``consolidate.py`` script),
+    replicating its ``main()`` behaviour: merge accounts grouped by
+    (institution, account_no, currency), de-duplicate transactions by
+    ``txn_id``, detect transfer / currency-conversion links, attach FX rates,
+    and verify transaction links.
+
+    \b
+    Examples:
+      pfa consolidate a.ir.json b.ir.json -o consolidated.ir.json
+      pfa consolidate *.ir.json --min-ir-version 2026.4
+    """
+    stmts_with_paths: list[tuple[str, object]] = []
+    for path in inputs:
+        text = Path(path).read_text(encoding="utf-8")
+        try:
+            stmt = from_json(text)
+        except ValueError as e:
+            sys.exit(f"[error] {path}: {e}")
+        if not _version_ge(stmt.ir_version, min_ir_version):
+            sys.exit(
+                f"[error] {path}: ir_version {stmt.ir_version!r} < required "
+                f"{min_ir_version!r}"
+            )
+        stmts_with_paths.append((str(path), stmt))
+
+    consolidated, total_in, deduped, filtered = consolidate_statements(
+        stmts_with_paths, do_dedup=not no_dedup
+    )
+    consolidated = detect_inter_bank_transfers(consolidated)
+    consolidated = detect_intra_bank_transfers(consolidated)
+    consolidated = detect_currency_conversions(consolidated)
+    consolidated = detect_cc_payments(consolidated)
+    consolidated = verify_txn_links(consolidated)
+    consolidated = embed_fx_rates(consolidated)
+
+    transfers = (consolidated.extras or {}).get("consolidation", {}).get("transfers", {})
+    inter_bank_detected = transfers.get("inter_bank_detected", 0)
+    intra_bank_detected = transfers.get("intra_bank_detected", 0)
+    cc_detected = transfers.get("currency_conversion_detected", 0)
+    cc_payments_detected = transfers.get("cc_payments_detected", 0)
+
+    out = Path(out_path)
+    _ = out.write_text(consolidated.to_json(indent=indent), encoding="utf-8")
+    total_out = total_in - deduped - filtered
+    click.echo(f"Wrote {out}")
+    click.echo(
+        f"  inputs={len(stmts_with_paths)} accounts={len(consolidated.accounts)} "
+        f"txns_in={total_in} txns_out={total_out} deduped={deduped} filtered={filtered}"
+    )
+    if inter_bank_detected:
+        click.echo(f"  inter_bank_transfers={inter_bank_detected} pairs")
+    if intra_bank_detected:
+        click.echo(f"  intra_bank_transfers={intra_bank_detected} pairs")
+    if cc_detected:
+        click.echo(f"  currency_conversion_transfers={cc_detected} pairs")
+    if cc_payments_detected:
+        click.echo(f"  cc_payments={cc_payments_detected} pairs")

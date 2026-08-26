@@ -121,8 +121,8 @@ def _step2_consolidate() -> Path | None:
 
         # Embed FX rates into extras.consolidation.fx so downstream analysis /
         # rendering can convert foreign balances to SGD.
-        from pfa_ir_consolidator.consolidate import finalize_consolidated_ir
-        consolidated = finalize_consolidated_ir(consolidated)
+        from pfa_ir_consolidator.consolidate import embed_fx_rates
+        consolidated = embed_fx_rates(consolidated)
 
         out_path = OUTPUT_DIR / "consolidated.ir.json"
         _ = out_path.write_text(consolidated.to_json(indent=2), encoding="utf-8")
