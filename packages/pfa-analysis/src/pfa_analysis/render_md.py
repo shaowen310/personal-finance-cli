@@ -210,10 +210,10 @@ def render_report(result: dict[str, Any], consolidated: bool = False,
     if not mbc:
         out.append("_No transactions \u2014 cash-flow statement below is not applicable._\n")
 
-    # ---- 2.1 Balance Sheet Drill-Down (by currency -> bucket) ---------------
+    # ---- 2.1 Balance Sheet Drill-Down (by bucket -> currency) ---------------
     if drilldown:
         out.append("## 2.1 Balance Sheet Drill-Down\n")
-        out.append("Account-level derivation of every figure in the Balance Sheet above, grouped first by currency then by bucket (Cash / Time Deposit / Investment / Liability). Accounts that contribute nothing are listed under Dropped as data-quality flags. SGD Equivalent uses the same FX rate as section 2.\n")
+        out.append("Account-level derivation of every figure in the Balance Sheet above, grouped by asset category (Cash / Time Deposit / Investment / Liability). Within each category all accounts are listed in one table, with one subtotal row per currency. Accounts that contribute nothing are listed under Dropped as data-quality flags. SGD Equivalent uses the same FX rate as section 2.\n")
         agg: dict[tuple[str, str, str, str, str], tuple[float, str]] = {}
         for r in drilldown:
             key = (r["currency"], r["bucket"], r.get("institution", ""),
@@ -221,43 +221,45 @@ def render_report(result: dict[str, Any], consolidated: bool = False,
             cur, deriv = agg.get(key, (0.0, r["derivation"]))
             agg[key] = (cur + (r.get("native_value") or 0.0), deriv)
 
-        ccy_sgd: dict[str, float] = defaultdict(float)
-        for (ccy, _b, _i, _a, _t), (val, _d) in agg.items():
-            se = convert_to_sgd(val, ccy, fx_rates)
-            ccy_sgd[ccy] += se if se is not None else 0.0
-        used_ccies = [c for c in sorted(ccy_sgd, key=lambda x: -ccy_sgd[x])
-                      if ccy_sgd[c] != 0.0 or any(k[0] == c and k[1] == "Dropped" for k in agg)]
-
         BUCKET_ORDER = ["Cash", "Time Deposit", "Investment", "Liability", "Dropped"]
-        for ccy in used_ccies:
-            rate_sgd = (
-                fx_rates.get("rates", {}).get(ccy)
-                if (fx_rates and ccy != FX_BASE)
-                else None
-            )
-            rate_disp = f"1 {ccy} = {rate_sgd:.4f} SGD" if rate_sgd is not None else "base currency (1 SGD = 1 SGD)"
-            out.append(f"### {ccy}  ")
-            out.append(f"_FX: {rate_disp}_\n")
-            for bucket in BUCKET_ORDER:
-                bvals = [(i, a, t, d, v) for (c, b, i, a, t), (v, d) in agg.items()
-                         if c == ccy and b == bucket and (v != 0.0 or bucket == "Dropped")]
-                if not bvals:
-                    continue
-                out.append(f"**{bucket}**\n")
-                out.append("| Institution | Account | Type | Derivation | CCY | OC | SGD Eq. |")
-                out.append("|---|---|---|---|---|---:|---:|")
-                bsum = 0.0
-                bsum_sgd = 0.0
-                for i, a, t, d, v in sorted(bvals, key=lambda x: -x[4]):
+        for bucket in BUCKET_ORDER:
+            bvals = [(c, i, a, t, d, v) for (c, b, i, a, t), (v, d) in agg.items()
+                     if b == bucket and (v != 0.0 or bucket == "Dropped")]
+            if not bvals:
+                continue
+            out.append(f"### {bucket}\n")
+            out.append("| Institution | Account | Type | Derivation | CCY | OC | SGD Eq. |")
+            out.append("|---|---|---|---|---|---:|---:|")
+            # Order currencies by descending SGD-equivalent so the largest
+            # currency appears first (matching the example layout).
+            ccy_sgd: dict[str, float] = defaultdict(float)
+            for c, _i, _a, _t, _d, v in bvals:
+                se = convert_to_sgd(v, c, fx_rates)
+                ccy_sgd[c] += se if se is not None else 0.0
+            csum_all = 0.0
+            csum_sgd_all = 0.0
+            for ccy in sorted(ccy_sgd, key=lambda x: -ccy_sgd[x]):
+                # Each currency's rows, then its subtotal row immediately after.
+                cs = 0.0
+                cs_sgd = 0.0
+                for c, i, a, t, d, v in sorted(
+                    [x for x in bvals if x[0] == ccy], key=lambda x: -x[5]
+                ):
                     se = convert_to_sgd(v, ccy, fx_rates)
                     out.append(f"| {i} | {a} | {t} | {d} | {ccy} | {fmt(v)} | {fmt(se)} |")
-                    bsum += v
-                    bsum_sgd += se if se is not None else 0.0
+                    cs += v
+                    cs_sgd += se if se is not None else 0.0
                 out.append(
-                    f"| **{bucket} subtotal** | | | | | **{fmt(bsum)}** | **{fmt(bsum_sgd)}** |"
+                    f"| **{ccy} subtotal** | | | | | **{fmt(cs)}** | **{fmt(cs_sgd)}** |"
                 )
-                out.append("")
+                csum_all += cs
+                csum_sgd_all += cs_sgd
+            out.append(
+                f"| **{bucket} total** | | | | | **{fmt(csum_all)}** | **{fmt(csum_sgd_all)}** |"
+            )
             out.append("")
+
+        out.append("")
 
     # ---- 3. Cash Flow Statement ----------------------------------------------
     out.append("## 3. Cash Flow Statement\n")
