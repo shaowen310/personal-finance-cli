@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-import click  # type: ignore[import-untyped]
+import click
 
 from pfa_parser import SGBankPDFParser
 
@@ -17,13 +17,31 @@ def cli() -> None:
 
 @cli.command()
 @click.option("-i", "--input", "input_path", required=True, help="Path to bank statement PDF")
-def parse(input_path: str) -> None:
-    """Parse a bank statement PDF via sg-bank-pdf-parser."""
+@click.option("-o", "--output", "output_path", default=None,
+              help="Write the ParsedStatement IR as .ir.json (default: <input>.ir.json)")
+def parse(input_path: str, output_path: str | None) -> None:
+    """Parse a bank statement PDF via sg-bank-pdf-parser.
+
+    Prints a flat transaction list to stdout, and optionally writes the full
+    ParsedStatement IR to a JSON file for downstream consolidation / analysis.
+    """
     parser = SGBankPDFParser()
-    transactions = parser.parse(input_path)
+    ir_stmt = parser.parse(input_path)
+
+    # Flat transaction listing derived from the IR
+    transactions = [
+        txn
+        for account in ir_stmt.accounts
+        for txn in account.transactions
+    ]
     click.echo(f"Parsed {len(transactions)} transactions from {input_path}")
     for tx in transactions:
-        click.echo(f"  {tx.date} | {tx.amount:>10.2f} {tx.currency} | {tx.description}")
+        click.echo(f"  {tx.posted_date} | {tx.amount:>10.2f} {tx.currency} | {tx.description}")
+
+    # Write IR JSON if requested (default: alongside input as <stem>.ir.json)
+    ir_path = Path(output_path) if output_path else Path(input_path).with_suffix(".ir.json")
+    _ = ir_path.write_text(ir_stmt.to_json(indent=2), encoding="utf-8")
+    click.echo(f"IR written: {ir_path}")
 
 
 @cli.command()

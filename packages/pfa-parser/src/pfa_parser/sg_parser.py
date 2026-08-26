@@ -1,8 +1,8 @@
 """Parser that integrates PDF extraction for SG bank PDF statements.
 
 Uses auto-detection (detect_type) to pick the right extractor, then calls
-to_ir() and flattens all accounts' transactions into the unified
-pfa_parser.Transaction model.
+to_ir() to produce the full ParsedStatement IR (serialisable to .ir.json
+and consumable by the consolidation / analysis pipeline).
 """
 
 from __future__ import annotations
@@ -11,8 +11,9 @@ from pathlib import Path
 from typing import override
 
 import pdfplumber
+from pfa_ir_schema import ParsedStatement
 
-from .base import BankStatementParser, Transaction
+from .base import BankStatementParser
 from .convert_statement import detect_type
 from .extractors.registry import get_extractor
 
@@ -25,8 +26,13 @@ class SGBankPDFParser(BankStatementParser):
         return Path(file_path).suffix.lower() == ".pdf"
 
     @override
-    def parse(self, file_path: str) -> list[Transaction]:
-        """Parse a PDF statement and return flat list of all transactions."""
+    def parse(self, file_path: str) -> ParsedStatement:
+        """Parse a PDF statement and return the full :class:`ParsedStatement` IR.
+
+        The returned statement is the post-processed IR — suitable for
+        serialising to ``.ir.json`` and feeding into the consolidation /
+        analysis pipeline.
+        """
         pdf_path = Path(file_path)
 
         # Step 1: Detect bank / statement family
@@ -41,25 +47,5 @@ class SGBankPDFParser(BankStatementParser):
                 f"File: {pdf_path.name}"
             )
 
-        extractor = ExtractorCls()
-        ir = extractor.to_ir(pdf_path)
-
-        # Step 3: Flatten all accounts' transactions into unified model
-        transactions: list[Transaction] = []
-        for account in ir.accounts:
-            for txn in account.transactions:
-                transactions.append(
-                    Transaction(
-                        date=txn.posted_date,  # already ISO YYYY-MM-DD
-                        description=txn.description,
-                        amount=txn.amount,
-                        currency=txn.currency,
-                        account_name=account.name,
-                        account_no=account.account_no,
-                        account_type=account.account_type,
-                        balance_after=txn.balance_after,
-                        transfer_labels=list(txn.transfer_labels),
-                    )
-                )
-
-        return transactions
+        # Step 3: Produce the ParsedStatement IR (no flattening)
+        return ExtractorCls().to_ir(pdf_path)

@@ -22,9 +22,7 @@ import traceback
 from collections import Counter
 from pathlib import Path
 
-import pdfplumber
-from pfa_parser.convert_statement import detect_type
-from pfa_parser.extractors.registry import get_extractor
+from pfa_parser import SGBankPDFParser
 from pfa_ir_schema import from_json as ir_from_json
 
 # Make repo root importable
@@ -69,20 +67,13 @@ def _reset_output_dir() -> None:
 def _step1_parse_pdfs(pdf_paths: list[Path]) -> bool:
     """Parse all PDFs into ParsedStatement IR (.ir.json)."""
     ok = True
+    parser = SGBankPDFParser()
 
     for pdf_path in pdf_paths:
         print(f"  Parsing: {pdf_path.name} …", end=" ", flush=True)
         try:
             ir_path = IR_DIR / f"{pdf_path.stem}.ir.json"
-            with pdfplumber.open(str(pdf_path)) as pdf:
-                bank, family = detect_type(pdf)
-            ExtractorCls = get_extractor(bank, family)
-            if ExtractorCls is None:
-                raise ValueError(
-                    f"No extractor found for bank={bank!r}, family={family!r}"
-                )
-            extractor = ExtractorCls()
-            ir_stmt = extractor.to_ir(pdf_path)
+            ir_stmt = parser.parse(str(pdf_path))
             n_txns = sum(len(a.transactions) for a in ir_stmt.accounts)
             _ = ir_path.write_text(ir_stmt.to_json(indent=2), encoding="utf-8")
 

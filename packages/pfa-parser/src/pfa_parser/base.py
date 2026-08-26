@@ -3,7 +3,8 @@
 from dataclasses import dataclass, field
 from datetime import date
 from abc import ABC, abstractmethod
-from typing import List
+
+from pfa_ir_schema import ParsedStatement
 
 
 @dataclass
@@ -27,8 +28,8 @@ class BankStatementParser(ABC):
     """Abstract base class for bank statement parsers."""
 
     @abstractmethod
-    def parse(self, file_path: str) -> List[Transaction]:
-        """Parse a bank statement file and return list of transactions."""
+    def parse(self, file_path: str) -> ParsedStatement:
+        """Parse a bank statement file and return the full ParsedStatement IR."""
         ...
 
     @abstractmethod
