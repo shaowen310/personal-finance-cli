@@ -124,12 +124,12 @@ def detect_dbs(pdf: PDFType) -> tuple[str, str] | None:
     full_text = ""
     for page in pdf.pages:
         full_text += "\n" + (page.extract_text() or "")
+    up = full_text.upper()
 
     # Legacy single-account savings statement (no rotated banner).
-    legacy_markers = ("DBS Bank Ltd", "REMIX", "eSAVINGS", "As at")
-    if all(marker in full_text for marker in ("DBS Bank Ltd", "As at")) and any(
-        marker in full_text for marker in ("REMIX", "eSAVINGS")
-    ):
+    # The product name is printed with mixed case (e.g. "DBS Remix eSavings
+    # Plus"), so match case-insensitively.
+    if "DBS BANK LTD" in up and "AS AT" in up and ("REMIX" in up or "ESAVINGS" in up):
         return ("dbs", "txn_2013")
 
     # Current consolidated statement — rotated left-margin banner.

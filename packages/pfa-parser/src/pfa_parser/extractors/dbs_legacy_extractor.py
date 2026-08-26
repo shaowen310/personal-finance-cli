@@ -78,10 +78,11 @@ class DBSTxn2013Extractor(BaseExtractor):
         with pdfplumber.open(str(pdf_path)) as pdf:
             for page in pdf.pages:
                 full_text += "\n" + (page.extract_text() or "")
+        up = full_text.upper()
         legacy = (
-            "DBS Bank Ltd" in full_text
-            and "As at" in full_text
-            and ("REMIX" in full_text or "eSAVINGS" in full_text)
+            "DBS BANK LTD" in up
+            and "AS AT" in up
+            and ("REMIX" in up or "ESAVINGS" in up)
         )
         return legacy
 
