@@ -22,8 +22,13 @@ SIDEBAR_NOISE: set[str] = {"detimiL", "noitaroproC", "gniknaB", "esenihC-aesrevO
 
 
 def is_bank_num(s: str) -> bool:
-    """True if ``s`` looks like a bank-style currency number, e.g. ``"X,XXX.XX"``."""
-    return bool(re.match(r"^\d{1,3}(,\d{3})*\.\d{2}$", (s or "").strip()))
+    """True if ``s`` looks like a bank-style currency number, e.g. ``"X,XXX.XX"``.
+
+    Also accepts a leading minus sign (``"-X,XXX.XX"``) so negative balances —
+    e.g. an overdraft (OD) account drawn below zero — are recognised as numeric
+    tokens rather than dropped (which previously left ``closing_balance`` null).
+    """
+    return bool(re.match(r"^-?\d{1,3}(,\d{3})*\.\d{2}$", (s or "").strip()))
 
 
 def mask_id(s: str, *, do_mask: bool = True) -> str:

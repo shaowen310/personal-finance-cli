@@ -47,7 +47,7 @@ UOB_TXN_DESC_X_START = 120     # description begins here
 UOB_TXN_DESC_X_MAX = 240       # exclude anything that drifts too far right
 UOB_TXN_WITHDRAWAL_X1 = (355, 390)
 UOB_TXN_DEPOSIT_X1 = (430, 470)
-UOB_TXN_BALANCE_X1 = (500, 550)
+UOB_TXN_BALANCE_X1 = (500, 560)  # widened to 560: OD-suffixed balances (e.g. "1,408.00OD") sit at x1≈557
 
 # --- UOB portfolio-style statement ---
 # The Deposits summary table shares the same x-edges as the transaction table.
@@ -60,6 +60,28 @@ UOB_INV_VAL_X1 = (500, 550)
 
 DATE_UOB_RE = re.compile(r"^\d{1,2}\s+[A-Za-z]{3}$")  # "02 Jun" (UOB mixed case)
 UOB_ACC_NO_RE = re.compile(r"\b\d{3}-\d{3}-\d{3}-\d{1,3}\b")  # e.g. "XXX-XXX-XXX-X"
+
+# UOB renders an overdrawn (overdraft) balance with a trailing "OD" suffix glued
+# to the number, e.g. "1,408.00OD" — meaning the account is overdrawn by 1,408.00
+# (a negative balance / amount owed). Strip that suffix and flag it as negative so
+# the value survives is_bank_num and is recorded with the correct sign.
+_OD_BALANCE_RE = re.compile(r"^(?P<num>-?\d{1,3}(?:,\d{3})*\.\d{2})(?P<suffix>OD)$", re.IGNORECASE)
+
+
+def _balance_token(text: str) -> tuple[str | None, bool]:
+    """Normalise a deposits-table balance word.
+
+    Returns ``(clean_number, is_negative)`` where ``clean_number`` is the bare
+    ``X,XXX.XX`` string (suitable for ``is_bank_num`` / ``_parse_amount``) or
+    ``None`` if the word is not a balance figure. A trailing ``OD`` suffix marks
+    the balance as negative (overdraft).
+    """
+    if is_bank_num(text):
+        return text, text.startswith("-")
+    m = _OD_BALANCE_RE.match((text or "").strip())
+    if m:
+        return m.group("num"), True
+    return None, False
 
 MONTH_MAP = {m: i + 1 for i, m in enumerate(
     ["jan", "feb", "mar", "apr", "may", "jun",
@@ -439,7 +461,8 @@ def parse_uob_portfolio(pdf: Any):
                 elif not d["currency"]:
                     d["currency"] = "SGD"  # UOB SG portfolio: default to SGD
                 for w in ln:
-                    if not is_bank_num(w["text"]):
+                    _bt, _bt_neg = _balance_token(w["text"])
+                    if _bt is None:
                         continue
                     if 280 <= w["x1"] <= 305:
                         d["credit_line"] = d["credit_line"] or w["text"]
@@ -447,8 +470,9 @@ def parse_uob_portfolio(pdf: Any):
                         d["interest_earned"] = d["interest_earned"] or w["text"]
                     elif 440 <= w["x1"] <= 470:
                         d["interest_charged"] = d["interest_charged"] or w["text"]
-                    elif 500 <= w["x1"] <= 550:
-                        d["balance"] = d["balance"] or w["text"]
+                    elif 500 <= w["x1"] <= 560:
+                        # Preserve the sign: an OD-suffixed balance is negative.
+                        d["balance"] = d["balance"] or (("-" + _bt) if _bt_neg else _bt)
                 break
 
         # (handled via the shared helper, which also returns fx_rates for
@@ -742,7 +766,8 @@ def parse_uob_one(pdf: Any):
                         if re.match(r"^[A-Z]{3}$", w["text"]) and 195 <= w["x0"] <= 215:
                             ccy_token = w["text"]
                             continue
-                        if not is_bank_num(w["text"]):
+                        _bt, _bt_neg = _balance_token(w["text"])
+                        if _bt is None:
                             name_words.append(w)
                             continue
                         if 280 <= w["x1"] <= 305:
@@ -751,8 +776,9 @@ def parse_uob_one(pdf: Any):
                             interest_earned = interest_earned or w["text"]
                         elif 440 <= w["x1"] <= 470:
                             interest_charged = interest_charged or w["text"]
-                        elif 500 <= w["x1"] <= 550:
-                            balance = balance or w["text"]
+                        elif 500 <= w["x1"] <= 560:
+                            # Preserve the sign: an OD-suffixed balance is negative.
+                            balance = balance or (("-" + _bt) if _bt_neg else _bt)
 
                     # Only process if we detected meaningful numeric data.
                     if not (bool(credit_line) or bool(balance)):
