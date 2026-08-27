@@ -30,7 +30,6 @@ balance), Key Observations, Notes & Caveats.
 """
 from __future__ import annotations
 
-import argparse
 import json
 import re
 import sys
@@ -164,11 +163,22 @@ def _own_account_digits(accounts: list[dict[str, Any]]) -> set[str]:
 def _is_self_reference(description: str, own_digits: set[str]) -> bool:
     """True if a transaction description references one of the user's own
     account numbers — i.e. it is a transfer between the user's own accounts
-    (inter-account moves) even when the
-    consolidation module did not flag it ``is_internal_transfer``.
+    (inter-account moves) even when the consolidation module did not flag it
+    ``is_internal_transfer``.
+
+    Matching is deliberately strict: an account number must appear as a *whole*
+    digit run, not as a substring buried inside a longer transaction-reference
+    number. A naive substring check would, e.g., match a 10-digit account number
+    inside a 20-digit payment reference and falsely flag the row. (FX / currency
+    conversions are handled by the consolidation module, which links them with
+    ``mark_internal=False``, so they are never flagged here.)
     """
-    desc = "".join(ch for ch in description.upper() if ch.isdigit())
-    return any(no and no in desc for no in own_digits)
+    if not description or not own_digits:
+        return False
+    # Extract contiguous digit runs and match them exactly against known
+    # account numbers.
+    digit_runs = re.findall(r"\d+", description)
+    return any(run == no for run in digit_runs for no in own_digits)
 
 
 def _load_consolidated_ir(data: dict[str, Any], path: Path,
@@ -196,6 +206,11 @@ def _load_consolidated_ir(data: dict[str, Any], path: Path,
                 if end_date and posted > end_date:
                     continue
             desc = str(t.get("description", "")).strip()
+            # A row is an internal transfer if the consolidator flagged it
+            # is_internal_transfer, or it references one of the user's own
+            # accounts (even when the consolidator missed it). The consolidation
+            # module links currency conversions with mark_internal=False, so they
+            # never arrive labelled as an internal transfer.
             is_internal = bool(t.get("is_internal_transfer", False)) or _is_self_reference(desc, own_digits)
             txns.append({
                 "date": str(t.get("posted_date", t.get("value_date", ""))),
