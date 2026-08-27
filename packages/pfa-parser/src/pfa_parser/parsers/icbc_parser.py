@@ -523,36 +523,38 @@ def _parse_ca_txn_line(
         # B/F case — single balance value, no transaction amount
         balance = amounts[0]
     elif len(amounts) == 2:
-        # Single transaction amount + running balance. Infer direction
-        # from the balance movement relative to the previous row.
+        # Single transaction amount + running balance. ICBC may print the
+        # amount with an unreliable sign (e.g. both legs of a
+        # rejected-payment-then-refund show '-'), so direction is derived
+        # from the RUNNING-BALANCE movement, the authoritative signal:
+        #   - balance DECREASED  -> withdrawal (money out)
+        #   - balance INCREASED  -> deposit (money in)
+        # The amount magnitude is always stored positive.
         balance = amounts[-1]
-        amount_str = amounts[0]
-        # A negative value in the amount slot denotes a withdrawal
-        # (e.g. a reversal/correction). Normalize it to a positive
-        # withdrawal rather than leaving a meaningless negative deposit.
-        if amount_str.strip().startswith("-"):
-            withdrawal = amount_str.lstrip("-")
+        amount_str = amounts[0].strip().lstrip("+").lstrip("-")
+        try:
+            amt_val = round(float(amount_str.replace(",", "")), 2)
+            bal_val = round(float(balance.replace(",", "")), 2)
+            prev = round(prev_balance, 2) if prev_balance is not None else None
+            decreased = prev is not None and round(bal_val + amt_val, 2) == prev
+            increased = prev is not None and round(bal_val - amt_val, 2) == prev
+        except ValueError:
+            decreased = increased = False
+        if decreased:
+            withdrawal = amount_str
+        elif increased:
+            deposit = amount_str
         else:
-            try:
-                amt_val = float(amount_str.replace(",", ""))
-                bal_val = float(balance.replace(",", ""))
-                is_withdrawal = (
-                    prev_balance is not None and bal_val < prev_balance
-                )
-            except ValueError:
-                is_withdrawal = False
-            if is_withdrawal:
-                withdrawal = amount_str
-            else:
-                deposit = amount_str
+            # Ambiguous (e.g. B/F adjacent); default to deposit.
+            deposit = amount_str
     elif len(amounts) >= 3:
         # Deposit / Withdrawal / Balance columns explicitly present.
         balance = amounts[-1]
         # Normalize a negative deposit to a positive withdrawal.
         if amounts[0].strip().startswith("-"):
-            withdrawal = amounts[0].lstrip("-")
+            withdrawal = amounts[0].strip().lstrip("-")
         else:
-            deposit = amounts[0]
+            deposit = amounts[0].strip().lstrip("+")
         withdrawal = withdrawal or amounts[1]
 
     return CATxnRow(
