@@ -790,7 +790,7 @@ def build_income_expense_drilldowns(
                 "account_type": str(row.get("account_type", "")),
             })
         elif cat_cls == "Income":
-            src = cat_sub or cat_full or "Income"
+            src = cat_sub or cat_full or "Uncategorized"
             src_ccy[src][row["currency"]] += abs(float(row["amount"]))
             src_txns[src].append({
                 "date": str(row.get("date", "")),
@@ -809,7 +809,7 @@ def build_income_expense_drilldowns(
             # classification to assign to income or expense.
             flow = classify_cash_flow(row)
             if flow == "Income":
-                src = cat_sub or cat_full or "Income"
+                src = cat_sub or cat_full or "Uncategorized"
                 src_ccy[src][row["currency"]] += abs(float(row["amount"]))
                 src_txns[src].append({
                     "date": str(row.get("date", "")),
