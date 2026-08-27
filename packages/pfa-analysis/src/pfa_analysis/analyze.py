@@ -339,17 +339,28 @@ def compute_metrics(txns: list[Txn], meta: dict[str, Any], ccy: str,
     truncated window.
     """
     income = expense = transfer_in = transfer_out = 0.0
+    transfer_in_int = transfer_in_ext = 0.0
+    transfer_out_int = transfer_out_ext = 0.0
     for t in txns:
         c = classify_cash_flow(t)
         a = abs(t["amount"])  # classify_cash_flow already set the direction
+        is_int = bool(t.get("is_internal_transfer", False))
         if c == "Income":
             income += a
         elif c == "Transfer In":
             transfer_in += a
+            if is_int:
+                transfer_in_int += a
+            else:
+                transfer_in_ext += a
         elif c == "Expense":
             expense += a
         elif c == "Transfer Out":
             transfer_out += a
+            if is_int:
+                transfer_out_int += a
+            else:
+                transfer_out_ext += a
 
     total_inflow = income + transfer_in
     total_outflow = expense + transfer_out
@@ -380,7 +391,12 @@ def compute_metrics(txns: list[Txn], meta: dict[str, Any], ccy: str,
 
     return {
         "income": income, "expense": expense, "transfer_in": transfer_in,
-        "transfer_out": transfer_out, "total_inflow": total_inflow,
+        "transfer_out": transfer_out,
+        "transfer_in_internal": transfer_in_int,
+        "transfer_in_external": transfer_in_ext,
+        "transfer_out_internal": transfer_out_int,
+        "transfer_out_external": transfer_out_ext,
+        "total_inflow": total_inflow,
         "total_outflow": total_outflow, "net_change_cash": net_change_cash,
         "net_operating": net_operating, "savings_rate": savings_rate,
         "opening": opening, "closing": closing, "balance_change": balance_change,

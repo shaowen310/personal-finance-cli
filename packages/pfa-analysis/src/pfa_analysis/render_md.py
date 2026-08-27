@@ -274,15 +274,24 @@ def render_report(result: dict[str, Any], consolidated: bool = False,
     out.append("## 3. Cash Flow Statement\n")
     if mbc:
         cf_ccies = sorted(mbc)
+        # Helper: pull a per-currency field across all currencies.
+        def _col(field: str) -> dict[str, float]:
+            return {c: mbc[c][field] for c in cf_ccies}
+
         # One row per cash-flow line item, each spanning all currency columns.
+        # Internal transfers = moves between the user's own accounts (not real
+        # cash flow); external transfers = flows to/from third parties. Outflows
+        # (expense, transfer out) are shown with their natural negative sign.
         # (label, {ccy: signed_value}, bold?)
         cf_rows: list[tuple[str, dict[str, float], bool]] = [
-            ("Income", {c: mbc[c]["income"] for c in cf_ccies}, False),
-            ("Transfer In", {c: mbc[c]["transfer_in"] for c in cf_ccies}, False),
+            ("Income", _col("income"), False),
+            ("Transfer In (External)", _col("transfer_in_external"), False),
+            ("Transfer In (Internal)", _col("transfer_in_internal"), False),
             ("Expense", {c: -mbc[c]["expense"] for c in cf_ccies}, False),
-            ("Transfer Out", {c: -mbc[c]["transfer_out"] for c in cf_ccies}, False),
-            ("Net Operating", {c: mbc[c]["net_operating"] for c in cf_ccies}, True),
-            ("Net Change in Cash", {c: mbc[c]["net_change_cash"] for c in cf_ccies}, True),
+            ("Transfer Out (External)", {c: -mbc[c]["transfer_out_external"] for c in cf_ccies}, False),
+            ("Transfer Out (Internal)", {c: -mbc[c]["transfer_out_internal"] for c in cf_ccies}, False),
+            ("Net Operating", _col("net_operating"), True),
+            ("Net Change in Cash", _col("net_change_cash"), True),
         ]
 
         header_parts = ["| Cash Flow"]
