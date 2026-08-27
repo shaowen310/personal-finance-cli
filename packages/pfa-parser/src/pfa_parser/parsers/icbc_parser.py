@@ -92,6 +92,12 @@ TOTAL_DR_RE = re.compile(r"^Total\s+Dr\.\s*")
 TOTAL_CR_RE = re.compile(r"^Total\s+Cr\.\s*")
 # Detects multi-line TIME DEPO AUTO ROLLOVER remark start lines.
 TIME_DEPO_RE = re.compile(r"^TIME\s+DEPO\s+AUTO\s+ROLLOVER", re.IGNORECASE)
+# A free remark line is a *reference/merchant code* (belongs to the NEXT
+# transaction, printed above its date line) when it contains a long
+# alphanumeric token or starts with a run of digits (e.g. the ICBC txn
+# reference "20260726ICBKSGSGBRT8676177ERCEZ WASH"). Short plain-word memos
+# such as "LAUNDRY" are continuations of the CURRENT transaction.
+REF_RE = re.compile(r"[A-Z0-9]{10,}|^\d{6,}")
 
 
 # ============================================================================
@@ -405,13 +411,22 @@ def _parse_transaction_sections(
                 # Multi-line remark start — accumulate
                 pending_remark_parts.append(raw)
 
-            elif current_txn is not None:
-                # Remark continuation for multi-line descriptions
-                current_txn["remark"] += " " + raw
-
             else:
-                # Free-standing remark before any date line
-                pending_remark_parts.append(raw)
+                # Free-standing / continuation remark line (no date).
+                # ICBC prints each transaction as:
+                #   [MERCHANT REF line]      <- above the date line (next txn)
+                #   [YYYY/MM/DD ... AMT BAL]  <- date line
+                #   [memo continuation]       <- below the date line (same txn)
+                # A long reference code (REF_RE) is the merchant ref for the
+                # *next* transaction, so it goes to pending_remark_parts.
+                # A short plain-word memo (e.g. "LAUNDRY") is a continuation of
+                # the *current* transaction and appends to its remark.
+                if current_txn is not None and not REF_RE.search(raw):
+                    current_txn["remark"] = (
+                        current_txn["remark"] + " " + raw
+                    ).strip()
+                else:
+                    pending_remark_parts.append(raw)
 
         elif in_fd:
             # Detect FD account number
