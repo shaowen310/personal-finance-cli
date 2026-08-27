@@ -47,6 +47,52 @@ def fmt(v: float | None) -> str:
     return f"{v:,.2f}" if isinstance(v, (int, float)) else "\u2014"
 
 
+def _render_txn_detail_table(out: list[str], entries: list[dict[str, Any]], key: str,
+                             use_fx: bool,
+                             fx_rates: dict[str, Any] | None) -> None:
+    """Append a per-transaction detail table (used by the income, expense and
+    transfer drill-downs) to ``out``.
+
+    The caller is responsible for writing the section's ``## ...`` heading; this
+    helper emits, per entry, a ``### <entry>`` sub-heading followed by its own
+    complete table (header + rows). The header is repeated per entry because a
+    ``###`` sub-heading between the section header and the rows would otherwise
+    break the Markdown table (rows after the heading would lose their header).
+    ``entries`` is a list of drill-down entries; each entry's display heading
+    comes from ``entry[key]`` and its rows from ``entry["transactions"]``. The
+    table shows one row per transaction with ``CCY`` / ``OC`` (original-currency
+    amount) columns, plus an ``SGD Eq.`` column when ``use_fx`` is set.
+    """
+    for entry in entries:
+        heading = entry.get(key, "")
+        txns = entry.get("transactions", [])
+        if not txns:
+            continue
+        out.append(f"### {heading}\n")
+        if use_fx:
+            out.append("| Date | Institution | Account | Account Type | Description | CCY | OC | SGD Eq. |")
+            out.append("|---|---|---|---|---|---:|---:|---:|")
+        else:
+            out.append("| Date | Institution | Account | Account Type | Description | CCY | OC |")
+            out.append("|---|---|---|---|---|---:|---:|")
+        for t in txns:
+            desc = t["description"].strip().replace("|", "\\|")
+            ccy = t.get("currency", "")
+            oc = fmt(t["amount"])
+            if use_fx:
+                sgd = convert_to_sgd(t["amount"], ccy, fx_rates)
+                out.append(
+                    f"| {t['date']} | {t.get('bank', '')} | {t.get('account', '')} | "+
+                    f"{t.get('account_type', '')} | {desc} | {ccy} | {oc} | {fmt(sgd)} |"
+                )
+            else:
+                out.append(
+                    f"| {t['date']} | {t.get('bank', '')} | {t.get('account', '')} | "+
+                    f"{t.get('account_type', '')} | {desc} | {ccy} | {oc} |"
+                )
+        out.append("\n")
+
+
 def render_report(result: dict[str, Any], consolidated: bool = False,
                   fx_rates: dict[str, Any] | None = None,
                   drilldown: list[dict[str, Any]] | None = None,
@@ -371,21 +417,7 @@ def render_report(result: dict[str, Any], consolidated: bool = False,
             out.append(f"| **Total Income (per currency above)** | | |")
         out.append("")
 
-        for entry in income_drilldown:
-            txns: list[dict[str, Any]] = entry.get("transactions", [])
-            if not txns:
-                continue
-            source = entry["source"]
-            out.append(f"### {source}\n")
-            out.append("| Date | Institution | Account | Account Type | Description | Amount |")
-            out.append("|---|---|---|---|---|---:|")
-            for t in txns:
-                desc = t["description"].strip().replace("|", "\\|")
-                out.append(
-                    f"| {t['date']} | {t.get('bank', '')} | {t.get('account', '')} | "+
-                    f"{t.get('account_type', '')} | {desc} | {fmt(t['amount'])} {t.get('currency', '')} |"
-                )
-            out.append("")
+        _render_txn_detail_table(out, income_drilldown, "source", use_fx, fx_rates)
 
     # ---- Expense Breakdown ---------------------------------------------------
     if expense_drilldown:
@@ -434,21 +466,7 @@ def render_report(result: dict[str, Any], consolidated: bool = False,
             out.append(f"| **Total Expense (per currency above)** | | |")
         out.append("")
 
-        for entry in expense_drilldown:
-            txns = entry.get("transactions", [])
-            if not txns:
-                continue
-            cat = entry["category"]
-            out.append(f"### {cat}\n")
-            out.append("| Date | Institution | Account | Account Type | Description | Amount |")
-            out.append("|---|---|---|---|---|---:|")
-            for t in txns:
-                desc = t["description"].strip().replace("|", "\\|")
-                out.append(
-                    f"| {t['date']} | {t.get('bank', '')} | {t.get('account', '')} | "+
-                    f"{t.get('account_type', '')} | {desc} | {fmt(t['amount'])} {t.get('currency', '')} |"
-                )
-            out.append("")
+        _render_txn_detail_table(out, expense_drilldown, "category", use_fx, fx_rates)
 
     # ---- Transfer Breakdown --------------------------------------------------
     if transfer_drilldown:
@@ -497,21 +515,7 @@ def render_report(result: dict[str, Any], consolidated: bool = False,
             out.append(f"| **Total Transfers (per currency above)** | | |")
         out.append("")
 
-        for entry in transfer_drilldown:
-            txns = entry.get("transactions", [])
-            if not txns:
-                continue
-            cat = entry["category"]
-            out.append(f"### {cat}\n")
-            out.append("| Date | Institution | Account | Account Type | Description | Amount |")
-            out.append("|---|---|---|---|---|---:|")
-            for t in txns:
-                desc = t["description"].strip().replace("|", "\\|")
-                out.append(
-                    f"| {t['date']} | {t.get('bank', '')} | {t.get('account', '')} | "+
-                    f"{t.get('account_type', '')} | {desc} | {fmt(t['amount'])} {t.get('currency', '')} |"
-                )
-            out.append("")
+        _render_txn_detail_table(out, transfer_drilldown, "category", use_fx, fx_rates)
 
     # ---- 4. Key Observations -------------------------------------------------
     out.append("## 4. Key Observations\n")
