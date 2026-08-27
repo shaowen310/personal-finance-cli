@@ -13,11 +13,10 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-from pfa_fx import fetch_fx_rates  # noqa: F401  (used by build_dashboard_json)
+from pfa_analysis.fx_cache import fetch_fx_rates  # noqa: F401  (cached; used by build_dashboard_json)
 from pfa_analysis.analyze import (
     _analyze_file,
     _classify_discretionary,
-    _extract_consolidated_fx,
     _load_ir_with_txn_id,
     _NON_CASH_ACCOUNT_TYPES,
     _split_cat,
@@ -80,20 +79,13 @@ def build_dashboard_json(
     # ---- FX rates -----------------------------------------------------------
     fx_rates: dict[str, Any] | None = None
     fx_data: dict[str, float] = {}
-    # Prefer FX rates embedded in a consolidated IR (bank-ir-consolidate),
-    # which already carry the correct as-of rates. Otherwise fall back to
-    # fetching from the Frankfurter API at the latest statement period-end.
-    for r in all_results:
-        cb = r.get("_meta_raw", r.get("meta", {})).get("extras", {}).get("consolidation", {}).get("fx")
-        if cb:
-            fx_rates = _extract_consolidated_fx({"extras": {"consolidation": {"fx": cb}}})
-            break
-    if fx_rates is None:
-        iso_dates = [parse_date_to_iso(r.get("_meta_raw", r.get("meta", {})).get("period_end"))
-                     for r in all_results]
-        valid_dates = [d for d in iso_dates if d]
-        if valid_dates:
-            fx_rates = fetch_fx_rates(max(valid_dates))
+    # IR files no longer embed FX. Value FX as of the latest statement
+    # period-end across the loaded results (cached in %TEMP% by fetch_fx_rates).
+    iso_dates = [parse_date_to_iso(r.get("_meta_raw", r.get("meta", {})).get("period_end"))
+                 for r in all_results]
+    valid_dates = [d for d in iso_dates if d]
+    if valid_dates:
+        fx_rates = fetch_fx_rates(max(valid_dates))
     if fx_rates:
         fx_data = {str(k).upper(): float(v) for k, v in fx_rates["rates"].items()}
 

@@ -13,20 +13,20 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 from typing import Any
 
 from pfa_analysis.analyze import (
     _analyze_file,
-    _extract_consolidated_fx,
     _internal_transfer_ids,
     _split_default,
     build_assets,
     build_income_expense_drilldowns,
     build_transfer_drilldown,
-    fetch_fx_rates,
     parse_date_to_iso,
 )
+from pfa_analysis.fx_cache import fetch_fx_rates
 from pfa_analysis.dashboard import build_dashboard_json
 from pfa_analysis.render_md import render_report
 
@@ -89,28 +89,28 @@ def render_consolidated_report(
     re-implementing the assembly logic.
     """
     result = _analyze_file(consolidated_path, start_date, end_date)
-    raw = json.loads(consolidated_path.read_text(encoding="utf-8"))
     # FX rate selection:
     #  - When a cut-off window is supplied, value FX as of the cut-off end date
-    #    (or start date if no end) so the SGD column is consistent with the
-    #    filtered balances ("as of 0731" uses the 0731 rate, not the IR's
-    #    build-date snapshot).
-    #  - Otherwise prefer the IR's embedded FX snapshot; fall back to the
-    #    statement period-end rate only if the IR has no embedded FX.
+    #    ("as of 0731" uses the 0731 rate, not the IR's build-date snapshot).
+    #    The rate is fetched and cached in %TEMP% by ``fetch_fx_rates``.
+    #  - If that is unavailable (API down / non-trading day / no network), fall
+    #    back to the statement period-end rate so SGD conversion still works.
     if end_date:
-        # A cut-off end date is supplied → value FX as of that date so the SGD
-        # column is consistent with the filtered balances ("as of 0731" uses the
-        # 0731 rate, not the IR's build-date snapshot). start_date alone does not
-        # define an "as of" point, so it falls through to the default path.
         fx_cutoff = parse_date_to_iso(end_date)
         fx_rates = fetch_fx_rates(fx_cutoff) if fx_cutoff else None
     else:
-        fx_rates = _extract_consolidated_fx(raw)
-        if fx_rates is None and result["meta"].get("_consolidated"):
-            period_end = parse_date_to_iso(result["meta"].get("period_end"))
-            if period_end:
-                fx_rates = fetch_fx_rates(period_end)
-    if fx_rates:
+        fx_rates = None
+    if fx_rates is None and result["meta"].get("_consolidated"):
+        period_end = parse_date_to_iso(result["meta"].get("period_end"))
+        if period_end:
+            fx_rates = fetch_fx_rates(period_end)
+    if fx_rates is None:
+        print(
+            "[WARN] FX rates unavailable; multi-currency balances will not be "
+            "converted to SGD.",
+            file=sys.stderr,
+        )
+    elif fx_rates:
         print(f"FX rates: {fx_rates['date']} from {fx_rates['source']}")
 
     cat_path = Path(categories_path) if categories_path else consolidated_path.with_name("categories.json")

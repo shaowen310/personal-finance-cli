@@ -287,17 +287,8 @@ def classify_cash_flow(txn: Txn) -> str:
 
 
 # ---------------------------------------------------------------------------
-# FX rate retrieval (for consolidated cross-currency conversion to SGD)
+# Date parsing utilities
 # ---------------------------------------------------------------------------
-#
-# FX logic has moved to the standalone ``pfa-fx`` leaf package. Rates are kept in
-# the *canonical* shape shared with pfa-ir-consolidator: SGD per 1 unit of foreign
-# currency (``"SGD": 1.0``). ``convert_to_sgd`` therefore multiplies.
-
-from pfa_fx import extract_embedded_fx, fetch_fx_rates as _pfa_fetch_fx_rates  # noqa: E402
-from pfa_analysis.render_md import convert_to_sgd  # noqa: E402  (wrapper-aware; accepts the FX rate dict)
-
-_FX_CACHE: dict[str, dict[str, Any] | None] = {}
 
 _MONTHS = {m: i for i, m in enumerate(
     ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"], start=1)}
@@ -324,43 +315,6 @@ def parse_date_to_iso(s: Any) -> str | None:
         if mon:
             return f"{m.group(3)}-{mon:02d}-{int(m.group(1)):02d}"
     return None
-
-
-def _extract_consolidated_fx(data: dict[str, Any]) -> dict[str, Any] | None:
-    """Pull FX rates out of a consolidated IR dict, if present.
-
-    The consolidated IR embeds ``extras.consolidation.fx.rates_sgd_per_unit``,
-    which is already in the canonical SGD-per-unit shape, so it is passed
-    through unchanged (no inversion needed). Returns ``None`` if absent.
-    """
-    fx = (data.get("extras") or {}).get("consolidation", {}).get("fx")
-    if not isinstance(fx, dict):
-        return None
-    rates_sgd = fx.get("rates_sgd_per_unit")
-    if not isinstance(rates_sgd, dict) or not rates_sgd:
-        return None
-    as_of = str(fx.get("as_of") or fx.get("requested_as_of")
-                or fx.get("as_of_date", ""))
-    return extract_embedded_fx(rates_sgd, as_of)
-
-
-def fetch_fx_rates(date_str: str) -> dict[str, Any] | None:
-    """Fetch FX rates as of ``date_str`` (YYYY-MM-DD), base = SGD.
-
-    Returns ``{"rates": {CCY: SGD per 1 unit, ...}, "date": str, "source": str}``
-    (canonical SGD-per-unit shape) or ``None`` on any failure. Callers must
-    handle ``None`` by degrading gracefully (no FX conversion).
-    """
-    if date_str in _FX_CACHE:
-        return _FX_CACHE[date_str]
-    try:
-        result = _pfa_fetch_fx_rates(date_str, currencies=[])
-    except Exception as e:  # noqa: BLE001 - degrade, never crash the report
-        print(f"[WARN] Failed to fetch FX rates for {date_str}: {e}", file=sys.stderr)
-        _FX_CACHE[date_str] = None
-        return None
-    _FX_CACHE[date_str] = result
-    return result
 
 
 # ---------------------------------------------------------------------------

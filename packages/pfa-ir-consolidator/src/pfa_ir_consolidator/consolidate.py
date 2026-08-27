@@ -265,11 +265,16 @@ def embed_fx_rates(
 ) -> Any:
     """Embed an FX rate block into a consolidated ``ParsedStatement``.
 
-    The analysis package reads FX rates from ``extras.consolidation.fx`` via
-    ``pfa_analysis.analyze._extract_consolidated_fx``. Without this step the
-    consolidated IR carries no FX block, so downstream SGD conversions silently
-    degrade. We fetch SGD-per-unit rates (falling back to the embedded default)
-    and store them in the canonical shape:
+    .. note::
+        FX rates are **no longer embedded by default**. The analysis package
+        fetches rates as of the reporting cut-off date and caches them in the
+        OS temp directory (``%TEMP%/pfa_fx_cache``), so the IR stays free of
+        build-date snapshots that would mislead readers ("as of 2026-08-18"
+        inside a July statement). This helper is kept only for callers that
+        explicitly want an inline FX block (e.g. ``--embed-fx``); the default
+        ``main`` path no longer calls it.
+
+    The embedded block, when present, is stored in the canonical shape:
 
         extras.consolidation.fx = {
             "rates_sgd_per_unit": {CCY: SGD per 1 unit, ...},
@@ -320,6 +325,9 @@ def main() -> None:
     _ = ap.add_argument("-o", "--out", default="consolidated.ir.json", help="Output IR JSON path")
     _ = ap.add_argument("--min-ir-version", default=DEFAULT_MIN_IR_VERSION, help="Minimum accepted ir_version")
     _ = ap.add_argument("--no-dedup", action="store_true", help="Disable txn_id de-duplication")
+    _ = ap.add_argument("--embed-fx", action="store_true",
+                        help="Embed an FX rate block in the IR (off by default; "
+                             "the analysis step fetches/caches FX separately)")
     _ = ap.add_argument("--indent", type=int, default=2, help="JSON indent")
     args = ap.parse_args()
 
@@ -347,6 +355,12 @@ def main() -> None:
 
     from pfa_parser.postprocess import verify_txn_links
     consolidated = verify_txn_links(consolidated)
+
+    # FX rates are intentionally NOT embedded by default — the analysis step
+    # fetches them as of the reporting cut-off and caches in %TEMP%. Embed only
+    # when --embed-fx is requested (e.g. for standalone IR portability).
+    if args.embed_fx:
+        consolidated = embed_fx_rates(consolidated)
 
     transfers = (consolidated.extras or {}).get("consolidation", {}).get("transfers", {})
     inter_bank_detected = transfers.get("inter_bank_detected", 0)
