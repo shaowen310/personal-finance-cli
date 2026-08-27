@@ -302,5 +302,5 @@ class DBSTxn2013Extractor(BaseExtractor):
             currency="SGD",
             description=row["details"],
             balance_after=row["balance_after"],
-            transfer_labels=[],
+            link_labels=[],
         )

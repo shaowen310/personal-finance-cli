@@ -22,7 +22,7 @@ def test_transaction_model():
         account_no="123-456-789",
         account_type="current",
         balance_after=15000.00,
-        transfer_labels=["salary"],
+        tags=["salary"],
     )
     assert tx.date == "2026-07-15"
     assert tx.amount == 5000.00

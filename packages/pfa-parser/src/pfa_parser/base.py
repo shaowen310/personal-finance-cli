@@ -1,7 +1,6 @@
 """Base classes for bank statement parsers."""
 
 from dataclasses import dataclass, field
-from datetime import date
 from abc import ABC, abstractmethod
 
 from pfa_ir_schema import ParsedStatement
@@ -11,7 +10,7 @@ from pfa_ir_schema import ParsedStatement
 class Transaction:
     """A single parsed transaction — the unified model for downstream consumers."""
 
-    date: date
+    date: str
     description: str
     amount: float  # signed: negative = debit (outflow), positive = credit (inflow)
     currency: str = "SGD"
@@ -20,7 +19,8 @@ class Transaction:
     account_type: str = ""
     balance_after: float | None = None
     category: str | None = None
-    transfer_labels: list[str] = field(default_factory=list)
+    tags: list[str] = field(default_factory=list)
+    link_labels: list[str] = field(default_factory=list)
     raw_line: str = ""
 
 

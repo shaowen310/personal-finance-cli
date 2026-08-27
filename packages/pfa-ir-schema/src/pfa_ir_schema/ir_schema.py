@@ -120,7 +120,15 @@ class Transaction:
     description: str = ""
 
     # === Classification ===
-    transfer_labels: list[str] = field(default_factory=list)
+    # Standalone classification tags (e.g. "salary"), independent of any
+    # linkage. Distinct from ``link_labels`` which describes relationships
+    # between transactions.
+    tags: list[str] = field(default_factory=list)
+
+    # === Relationship (links to twin/related transactions) ===
+    # Relationship labels describing how this transaction links to others
+    # (see pfa_ir_schema.relations). Accompanies ``linked_txn_ids``.
+    link_labels: list[str] = field(default_factory=list)
 
     # === Cashflow flags ===
     is_reversal: bool = False
@@ -216,7 +224,7 @@ class Account:
 class ParsedStatement:
     """Top-level IR container — the output of any Extractor.to_ir()."""
 
-    ir_version: str = "2026.4"
+    ir_version: str = "2026.5"
     parsed_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     parser: ParserInfo = field(default_factory=lambda: ParserInfo(name="", version=""))
     source_file: str = ""
@@ -274,7 +282,8 @@ def _transaction_from_dict(td: dict[str, Any]) -> Transaction:
         currency=td.get("currency", ""),
         interest_amount=td.get("interest_amount"),
         description=td.get("description", ""),
-        transfer_labels=td.get("transfer_labels", []),
+        tags=td.get("tags", []),
+        link_labels=td.get("link_labels", []),
         is_reversal=td.get("is_reversal", False),
         is_internal_transfer=td.get("is_internal_transfer", False),
         linked_txn_ids=td.get("linked_txn_ids") or [],

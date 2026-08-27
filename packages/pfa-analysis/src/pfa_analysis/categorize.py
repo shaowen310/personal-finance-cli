@@ -620,7 +620,7 @@ def categorize(
         if txn.txn_id not in result:
             # Try category_hint as a last-resort classification
             mapped = _HINT_CATEGORY_MAP.get(txn.category_hint) if txn.category_hint else None
-            # Also check tags (from transfer_labels) for hint matches
+            # Also check classification tags for hint matches
             if not mapped and txn.tags:
                 for tag in txn.tags:
                     mapped = _HINT_CATEGORY_MAP.get(tag)

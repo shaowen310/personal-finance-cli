@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, ClassVar, override
 
 from pfa_ir_schema import AccountType, InvestmentHolding, ParsedStatement
+from pfa_ir_schema.relations import REL_FD_INTEREST, REL_FD_PRINCIPAL
 from .base import BaseExtractor
 
 
@@ -209,7 +210,7 @@ class DBSExtractor(BaseExtractor):
                             currency=currency,
                             description=description or f"FD {deposit_no}".strip(),
                             is_internal_transfer=True,
-                            transfer_labels=fd_labels,
+                            link_labels=fd_labels,
                             interest_amount=interest_amount,
                             balance_after=balance,
                             extras={"fd_link": fd_link},
@@ -221,16 +222,16 @@ class DBSExtractor(BaseExtractor):
                         is_closure = is_withdrawal
                         fd_labels = []
                         if principal:
-                            fd_labels.append("fd_principal")
+                            fd_labels.append(REL_FD_PRINCIPAL)
                         if interest_amount:
-                            fd_labels.append("fd_interest")
+                            fd_labels.append(REL_FD_INTEREST)
                         _ = builder.add_transaction(
                             posted_date=eff_date,
                             amount=-principal if is_withdrawal else principal,
                             currency=currency,
                             description=description,
                             is_internal_transfer=True,
-                            transfer_labels=fd_labels,
+                            link_labels=fd_labels,
                             interest_amount=interest_amount,
                             balance_after=balance,
                             extras={"fd_link": fd_link},

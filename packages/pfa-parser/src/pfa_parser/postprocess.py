@@ -18,6 +18,10 @@ from pfa_ir_schema import (
     generate_txn_id,
     verify_fd_interest,
 )
+from pfa_ir_schema.relations import (
+    REL_FD_INTEREST,
+    REL_FD_PRINCIPAL,
+)
 
 
 def fill_fd_running_balances(statement: ParsedStatement) -> ParsedStatement:
@@ -225,8 +229,8 @@ def link_fd_to_ca(statement: ParsedStatement) -> ParsedStatement:
     # Interest earnings are investment income, not internal transfers.
     for acct in statement.accounts:
         for txn in (acct.transactions or []):
-            labels = txn.transfer_labels or []
-            if "fd_interest" in labels and "fd_principal" not in labels:
+            labels = txn.link_labels or []
+            if REL_FD_INTEREST in labels and REL_FD_PRINCIPAL not in labels:
                 txn.is_internal_transfer = False
 
     return statement
@@ -248,9 +252,9 @@ def _link_fd_ca(ca_txn: Transaction, fd_leg: Transaction,
     if ca_txn.txn_id not in fd_leg.linked_txn_ids:
         fd_leg.linked_txn_ids.append(ca_txn.txn_id)
     # Copy FD transfer labels (fd_principal / fd_interest) from the leg onto the twin, deduped.
-    for lbl in (fd_leg.transfer_labels or []):
-        if lbl not in ca_txn.transfer_labels:
-            ca_txn.transfer_labels = list(ca_txn.transfer_labels) + [lbl]
+    for lbl in (fd_leg.link_labels or []):
+        if lbl not in ca_txn.link_labels:
+            ca_txn.link_labels = list(ca_txn.link_labels) + [lbl]
     # Mirror the fd_link extras onto the twin for traceability.
     fd_link = (fd_leg.extras or {}).get("fd_link", {})
     ca_txn.extras = {
@@ -303,23 +307,23 @@ def _synthesize_ca_twin(
             amount=amt,
             currency=fd_leg.currency,
             description=desc_with_label,
-            transfer_labels=[label],
+            link_labels=[label],
             is_internal_transfer=is_internal_transfer,
         )
 
     # Principal leg — always emitted.
-    ca_principal = _make_ca("fd_principal", sign * principal, is_internal_transfer=True)
+    ca_principal = _make_ca(REL_FD_PRINCIPAL, sign * principal, is_internal_transfer=True)
     funding_acct.transactions.append(ca_principal)
     _link_fd_ca(ca_principal, fd_leg, matched_on="synthesized CA twin (renewal/rollover)")
     # Keep only the atomic label this synthetic row represents.
-    ca_principal.transfer_labels = ["fd_principal"]
+    ca_principal.link_labels = [REL_FD_PRINCIPAL]
 
     # Interest leg — only for closures.
     if interest > 0:
-        ca_interest = _make_ca("fd_interest", sign * interest, is_internal_transfer=False)
+        ca_interest = _make_ca(REL_FD_INTEREST, sign * interest, is_internal_transfer=False)
         funding_acct.transactions.append(ca_interest)
         _link_fd_ca(ca_interest, fd_leg, matched_on="synthesized CA twin (renewal/rollover)")
-        ca_interest.transfer_labels = ["fd_interest"]
+        ca_interest.link_labels = [REL_FD_INTEREST]
         return ca_interest
 
     return ca_principal
@@ -334,7 +338,7 @@ def _split_ca_combined_labels(
     where principal and interest credits arrive as distinct CA entries.
 
     A CA twin that was linked to a combined FD leg (e.g. maturity closure) ends
-    up with ``["fd_principal", "fd_interest"]`` after ``_link_fd_ca`` copies the
+    up with ``[REL_FD_PRINCIPAL, REL_FD_INTEREST]`` after ``_link_fd_ca`` copies the
     labels.  This helper splits it so that each row carries exactly one label and
     its matching amount, allowing downstream matching to operate on atomic rows.
     """
@@ -345,8 +349,8 @@ def _split_ca_combined_labels(
             continue
         new_txns = []
         for ca_txn in acct.transactions or []:
-            labels = ca_txn.transfer_labels or []
-            if "fd_principal" not in labels or "fd_interest" not in labels:
+            labels = ca_txn.link_labels or []
+            if REL_FD_PRINCIPAL not in labels or REL_FD_INTEREST not in labels:
                 new_txns.append(ca_txn)
                 continue
 
@@ -364,7 +368,7 @@ def _split_ca_combined_labels(
             # a combined FD leg.
             if total_interest <= 0 or abs(total_interest) >= abs(ca_txn.amount or 0.0) - 1e-6:
                 if abs(total_interest) >= abs(ca_txn.amount or 0.0) - 1e-6 and total_interest > 0:
-                    ca_txn.transfer_labels = [l for l in labels if l != "fd_principal"]
+                    ca_txn.link_labels = [l for l in labels if l != REL_FD_PRINCIPAL]
                 new_txns.append(ca_txn)
                 continue
 
@@ -379,10 +383,10 @@ def _split_ca_combined_labels(
                 for fd_acct2 in fd_accounts:
                     for fd_txn in fd_acct2.transactions or []:
                         if fd_txn.txn_id == fd_id:
-                            fd_labels = fd_txn.transfer_labels or []
-                            if "fd_principal" in fd_labels:
+                            fd_labels = fd_txn.link_labels or []
+                            if REL_FD_PRINCIPAL in fd_labels:
                                 fd_principal_ids.add(fd_id)
-                            if "fd_interest" in fd_labels:
+                            if REL_FD_INTEREST in fd_labels:
                                 fd_interest_ids.add(fd_id)
                             break
 
@@ -390,7 +394,7 @@ def _split_ca_combined_labels(
             # links stay intact for fd_principal legs.
             principal_txn = replace(ca_txn)
             principal_txn.amount = sign * (abs(ca_amt) - total_interest)
-            principal_txn.transfer_labels = [l for l in labels if l != "fd_interest"]
+            principal_txn.link_labels = [l for l in labels if l != REL_FD_INTEREST]
             principal_txn.linked_txn_ids = list(fd_principal_ids)
             new_txns.append(principal_txn)
 
@@ -399,7 +403,7 @@ def _split_ca_combined_labels(
             # income), so clear the (combined-row) flag that was copied down.
             interest_txn = replace(ca_txn)
             interest_txn.amount = sign * total_interest
-            interest_txn.transfer_labels = [l for l in labels if l != "fd_principal"]
+            interest_txn.link_labels = [l for l in labels if l != REL_FD_PRINCIPAL]
             interest_txn.linked_txn_ids = list(fd_interest_ids)
             interest_txn.is_internal_transfer = False
             interest_txn.txn_id = generate_txn_id(
@@ -419,9 +423,9 @@ def _split_ca_combined_labels(
                     for fd_txn in fd_acct2.transactions or []:
                         if fd_txn.txn_id != fd_id:
                             continue
-                        fd_labels = fd_txn.transfer_labels or []
-                        has_principal = "fd_principal" in fd_labels
-                        has_interest = "fd_interest" in fd_labels
+                        fd_labels = fd_txn.link_labels or []
+                        has_principal = REL_FD_PRINCIPAL in fd_labels
+                        has_interest = REL_FD_INTEREST in fd_labels
                         if has_interest:
                             if interest_txn.txn_id not in fd_txn.linked_txn_ids:
                                 fd_txn.linked_txn_ids.append(interest_txn.txn_id)

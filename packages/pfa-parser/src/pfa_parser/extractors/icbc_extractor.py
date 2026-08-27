@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import ClassVar, override
 
 from pfa_ir_schema import AccountType, ParsedStatement
+from pfa_ir_schema.relations import REL_FD_PRINCIPAL
 from .base import BaseExtractor
 from ..parsers.icbc_parser import CATxnRow, FDTxnRow
 
@@ -165,7 +166,7 @@ class ICBCExtractor(BaseExtractor):
                     currency=ccy,
                     description=str(t.get("remark", "") or "CLO"),
                     is_internal_transfer=True,
-                    transfer_labels=["fd_principal"],
+                    link_labels=[REL_FD_PRINCIPAL],
                     balance_after=_icbc_parse_balance(t.get("balance")),
                     extras={"fd_link": {
                         "fd_account_no": acct_no,

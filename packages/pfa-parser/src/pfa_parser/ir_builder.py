@@ -235,7 +235,8 @@ class IRBuilder:
         interest_amount: float | None = None,
         description: str = "",
         value_date: str | None = None,
-        transfer_labels: list[str] | None = None,
+        tags: list[str] | None = None,
+        link_labels: list[str] | None = None,
         is_reversal: bool = False,
         is_internal_transfer: bool = False,
         linked_txn_ids: list[str] | None = None,
@@ -255,7 +256,8 @@ class IRBuilder:
             currency=currency or self._functional_currency,
             interest_amount=interest_amount,
             description=description,
-            transfer_labels=transfer_labels or [],
+            tags=tags or [],
+            link_labels=link_labels or [],
             is_reversal=is_reversal,
             is_internal_transfer=is_internal_transfer,
             linked_txn_ids=linked_txn_ids or [],
@@ -341,7 +343,8 @@ class IRBuilder:
             currency=row.get("currency", ""),
             description=row.get("description", ""),
             value_date=row.get("value_date"),
-            transfer_labels=row.get("transfer_labels"),
+            tags=row.get("tags"),
+            link_labels=row.get("link_labels"),
             is_reversal=row.get("is_reversal", False),
             is_internal_transfer=row.get("is_internal_transfer", False),
             linked_txn_ids=row.get("linked_txn_ids") or [],
@@ -355,7 +358,7 @@ class IRBuilder:
         """Assemble and return the final ``ParsedStatement``."""
         self._meta.functional_currency = self._functional_currency
         return ParsedStatement(
-            ir_version="2026.4",
+            ir_version="2026.5",
             parsed_at=datetime.now(timezone.utc).isoformat(),
             parser=self._parser,
             source_file=self._source_file,

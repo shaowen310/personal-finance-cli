@@ -72,7 +72,8 @@ def parse_ir(path: Path) -> TxnIR:
                     "bank": institution,
                     "account": account_no,
                     "category_hint": extras.get("category_hint"),
-                    "tags": list(txn.transfer_labels),
+                    "tags": list(txn.tags),
+                    "link_labels": list(txn.link_labels),
                     "is_internal_transfer": txn.is_internal_transfer,
                 }
             )

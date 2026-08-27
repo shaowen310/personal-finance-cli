@@ -21,4 +21,4 @@ def test_transaction_defaults():
     assert tx.account_no == ""
     assert tx.balance_after is None
     assert tx.category is None
-    assert tx.transfer_labels == []
+    assert tx.link_labels == []

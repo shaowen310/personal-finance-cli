@@ -31,7 +31,7 @@ Detection rules (all must hold):
 When a pair is matched:
   * ``is_internal_transfer = True`` on BOTH transactions
   * ``linked_txn_ids`` cross-linked bidirectionally
-  * ``transfer_labels`` appended with ``"inter_bank"``, ``"intra_bank"``,
+  * ``link_labels`` appended with ``"inter_bank"``, ``"intra_bank"``,
     ``"currency_conversion"``, or ``"cc_payment"`` (deduped)
   * A warning emitted to ``statement.warnings``
 
@@ -43,6 +43,29 @@ from __future__ import annotations
 
 import re
 from typing import Any
+
+from pfa_ir_schema.relations import (
+    REL_CC_PAYMENT,
+    REL_CURRENCY_CONVERSION,
+    REL_INTER_BANK,
+    REL_INTRA_BANK,
+)
+
+# Keywords that mark a transaction as a genuine transfer (as opposed to an
+# ordinary spend/income that merely happens to be opposite another transaction
+# on the same day). Used to avoid false "internal transfer" links between
+# unrelated same-day/opposite-amount transactions (e.g. a LAUNDRY charge
+# paired with an unrelated credit).
+_TRANSFER_KEYWORD_RE = re.compile(
+    r"\b(TRANSFER|FAST|PAYNOW|PAYNOW|IBG|GIRO|TT|TELEGRAPHIC|INTERBANK|"
+    r"INTER-BANK|INWARD|OUTWARD|WIRE|REMITTANCE|TRF)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_transfer_like(description: str) -> bool:
+    """Return True if the description looks like a transfer between accounts."""
+    return bool(_TRANSFER_KEYWORD_RE.search(description or ""))
 
 
 def detect_inter_bank_transfers(statement: Any) -> Any:
@@ -110,6 +133,12 @@ def detect_inter_bank_transfers(statement: Any) -> Any:
                 if abs(txn_a.amount + txn_b.amount) > 1e-2:
                     continue
 
+                # Both sides must look like transfers. A bare merchant charge
+                # (e.g. "LAUNDRY") paired with an unrelated same-day credit is
+                # not an internal transfer.
+                if not _is_transfer_like(txn_a.description) or not _is_transfer_like(txn_b.description):
+                    continue
+
                 # Match found — cross-link.
                 used.add(i)
                 used.add(j)
@@ -141,12 +170,24 @@ def detect_inter_bank_transfers(statement: Any) -> Any:
     return statement
 
 
-def _cross_link(txn_a: Any, txn_b: Any, labels: tuple[str, ...] = ("inter_bank",)) -> None:
-    """Set ``is_internal_transfer``, cross-link ``linked_txn_ids``, and
-    append *labels* to ``transfer_labels`` on both transactions.
+def _cross_link(
+    txn_a: Any,
+    txn_b: Any,
+    labels: tuple[str, ...] = (REL_INTER_BANK,),
+    mark_internal: bool = True,
+) -> None:
+    """Cross-link *txn_a* and *txn_b* and append *labels* to both.
+
+    When *mark_internal* is True (default), both transactions are flagged
+    ``is_internal_transfer``. Currency conversions should pass False: an FX
+    conversion is a balance re-denomination within one multi-currency account,
+    not a transfer *between* the user's own accounts, so it must not be treated
+    as an internal transfer (doing so creates phantom inflows/outflows that
+    never balance).
     """
-    txn_a.is_internal_transfer = True
-    txn_b.is_internal_transfer = True
+    if mark_internal:
+        txn_a.is_internal_transfer = True
+        txn_b.is_internal_transfer = True
 
     if txn_b.txn_id not in txn_a.linked_txn_ids:
         txn_a.linked_txn_ids = list(txn_a.linked_txn_ids) + [txn_b.txn_id]
@@ -154,10 +195,10 @@ def _cross_link(txn_a: Any, txn_b: Any, labels: tuple[str, ...] = ("inter_bank",
         txn_b.linked_txn_ids = list(txn_b.linked_txn_ids) + [txn_a.txn_id]
 
     for lbl in labels:
-        if lbl not in txn_a.transfer_labels:
-            txn_a.transfer_labels = list(txn_a.transfer_labels) + [lbl]
-        if lbl not in txn_b.transfer_labels:
-            txn_b.transfer_labels = list(txn_b.transfer_labels) + [lbl]
+        if lbl not in txn_a.link_labels:
+            txn_a.link_labels = list(txn_a.link_labels) + [lbl]
+        if lbl not in txn_b.link_labels:
+            txn_b.link_labels = list(txn_b.link_labels) + [lbl]
 
 
 def detect_intra_bank_transfers(statement: Any) -> Any:
@@ -239,11 +280,16 @@ def detect_intra_bank_transfers(statement: Any) -> Any:
                 if abs(txn_a.amount + txn_b.amount) > 1e-2:
                     continue
 
+                # Both sides must look like transfers (same rationale as the
+                # inter-bank pass: avoid linking unrelated same-day charges).
+                if not _is_transfer_like(txn_a.description) or not _is_transfer_like(txn_b.description):
+                    continue
+
                 # Match found — cross-link.
                 used.add(i)
                 used.add(j)
 
-                _cross_link(txn_a, txn_b, labels=("intra_bank",))
+                _cross_link(txn_a, txn_b, labels=(REL_INTRA_BANK,))
                 matched_pairs += 1
 
                 warn = (
@@ -370,7 +416,10 @@ def detect_currency_conversions(statement: Any) -> Any:
         if acct_a.account_no == acct_b.account_no:
             continue
 
-        _cross_link(txn_a, txn_b, labels=("currency_conversion",))
+        # Currency conversions are NOT internal transfers between own accounts
+        # (they re-denominate one multi-currency account); cross-link them for
+        # traceability but do not mark them as internal transfers.
+        _cross_link(txn_a, txn_b, labels=(REL_CURRENCY_CONVERSION,), mark_internal=False)
         matched_pairs += 1
 
         warn = (
@@ -495,7 +544,7 @@ def detect_cc_payments(statement: Any) -> Any:
                 used.add(i)
                 used.add(j)
 
-                _cross_link(txn_a, txn_b, labels=("cc_payment",))
+                _cross_link(txn_a, txn_b, labels=(REL_CC_PAYMENT,))
                 matched_pairs += 1
 
                 # Determine which is current and which is CC for the warning.
