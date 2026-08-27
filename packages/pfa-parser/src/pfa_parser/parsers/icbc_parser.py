@@ -309,6 +309,10 @@ def _parse_transaction_sections(
     pending_remark_parts: list[str] = []
     current_txn: CATxnRow | None = None
     current_ccy = ""
+    # Track previous CA balance so a single-amount row whose running
+    # balance DECREASES can be inferred as a withdrawal (ICBC sometimes
+    # drops the withdrawal column on extraction).
+    prev_balance: float | None = None
 
     fd_header_seen = False
 
@@ -357,10 +361,17 @@ def _parse_transaction_sections(
                     ca_txns.append(current_txn)
                     current_txn = None
 
-                txn = _parse_ca_txn_line(raw, ca_acct_no, pending_remark_parts)
+                txn = _parse_ca_txn_line(raw, ca_acct_no, pending_remark_parts,
+                                        prev_balance)
                 if txn:
                     current_txn = txn
                     current_ccy = txn.get("ccy", current_ccy)
+                    bal = txn.get("balance", "")
+                    if bal:
+                        try:
+                            prev_balance = float(str(bal).replace(",", ""))
+                        except ValueError:
+                            pass
                 pending_remark_parts = []
 
             elif TOTAL_DR_RE.match(raw):
@@ -453,6 +464,7 @@ def _parse_ca_txn_line(
     raw: str,
     acct_no: str,
     pending_remark_parts: list[str],
+    prev_balance: float | None = None,
 ) -> CATxnRow | None:
     """Parse a single Current Account transaction data line.
 
@@ -460,6 +472,12 @@ def _parse_ca_txn_line(
 
     Multi-line remarks (e.g. TIME DEPO AUTO ROLLOVER) are merged from
     ``pending_remark_parts`` collected before this date line.
+
+    When a single transaction amount is present alongside the running
+    balance, the deposit/withdrawal direction is inferred from whether the
+    balance increased (deposit) or decreased (withdrawal) relative to the
+    previous row. This guards against ICBC statements where the explicit
+    Withdrawal column is blank/missing on extraction.
     """
     parts = raw.split()
     if len(parts) < 3:
@@ -504,14 +522,28 @@ def _parse_ca_txn_line(
     if len(amounts) == 1:
         # B/F case — single balance value, no transaction amount
         balance = amounts[0]
-    elif len(amounts) >= 2:
-        # Normal transaction: first amount = transaction, last = balance
+    elif len(amounts) == 2:
+        # Single transaction amount + running balance. Infer direction
+        # from the balance movement relative to the previous row.
         balance = amounts[-1]
-        if len(amounts) == 2:
-            deposit = amounts[0]
+        amount_str = amounts[0]
+        try:
+            amt_val = float(amount_str.replace(",", ""))
+            bal_val = float(balance.replace(",", ""))
+            is_withdrawal = (
+                prev_balance is not None and bal_val < prev_balance
+            )
+        except ValueError:
+            is_withdrawal = False
+        if is_withdrawal:
+            withdrawal = amount_str
         else:
-            # More than 2 amounts — unusual case; take the first as deposit
-            deposit = amounts[0]
+            deposit = amount_str
+    elif len(amounts) >= 3:
+        # Deposit / Withdrawal / Balance columns explicitly present.
+        balance = amounts[-1]
+        deposit = amounts[0]
+        withdrawal = amounts[1]
 
     return CATxnRow(
         date=date_str,

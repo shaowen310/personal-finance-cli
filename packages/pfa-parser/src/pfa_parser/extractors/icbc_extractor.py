@@ -72,14 +72,28 @@ class ICBCExtractor(BaseExtractor):
             acct_no = str(row.get("acct_no", ""))
             ccy = str(row.get("ccy", "SGD"))
             txns = ca_by_key.get((acct_no, ccy), [])
+            # The B/F (brought-forward) transaction row is ICBC's explicit
+            # opening balance for this (account, currency). Use it directly
+            # instead of deriving opening_balance downstream.
+            bf_txns = [t for t in txns if t.get("is_bf")]
+            opening_balance = None
+            if bf_txns:
+                bf_bal = str(bf_txns[0].get("balance", "") or "").replace(",", "")
+                opening_balance = float(bf_bal) if bf_bal else None
             _ = builder.add_account(
                 name=str(row.get("acct_type", "Current Account")),
                 account_no=acct_no,
                 account_type=AccountType.CURRENT.value,
                 currency=ccy,
+                opening_balance=opening_balance,
                 closing_balance=_icbc_parse_balance(row.get("balance")),
             )
             for t in txns:
+                # Skip per-currency "Total Dr./Cr." summary rows — they are
+                # statement subtotals, not real transactions, and including
+                # them double-counts the credits/debits.
+                if t.get("is_total"):
+                    continue
                 withdrawal = float(str(t.get("withdrawal", "0") or "0").replace(",", ""))
                 deposit = float(str(t.get("deposit", "0") or "0").replace(",", ""))
                 amount = deposit - withdrawal
