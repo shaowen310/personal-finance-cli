@@ -27,6 +27,14 @@ from pfa_analysis.txn_ir import parse_ir
 # Data model
 # ---------------------------------------------------------------------------
 
+# Default subcategory used when a transaction cannot be classified. Both the
+# categorization step (categorize.py) and the analysis/drilldown step
+# (analyze.py) reference these so the "uncategorized" label stays consistent
+# across the pipeline.
+UNCATEGORIZED = "Uncategorized"
+EXPENSE_UNCATEGORIZED = f"Expense:{UNCATEGORIZED}"
+INCOME_UNCATEGORIZED = f"Income:{UNCATEGORIZED}"
+
 
 @dataclass
 class TxnRow:
@@ -626,9 +634,9 @@ def categorize(
             at = txn.account_type.lower()
             is_debit = (txn.amount > 0) if at in _CREDIT_LIKE else (txn.amount < 0)
             if is_debit:
-                result[txn.txn_id] = "Expense:Other"
+                result[txn.txn_id] = EXPENSE_UNCATEGORIZED
             else:
-                result[txn.txn_id] = "Income:Other"
+                result[txn.txn_id] = INCOME_UNCATEGORIZED
 
     return result
 

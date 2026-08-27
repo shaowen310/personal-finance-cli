@@ -23,6 +23,7 @@ from pfa_analysis.analyze import (
     classify_cash_flow,
     parse_date_to_iso,
     parse_num,
+    UNCATEGORIZED,
 )
 from pfa_analysis.render_md import convert_to_sgd
 
@@ -274,7 +275,7 @@ def build_dashboard_json(
         cat = categories.get(txn_id, "")
         if not cat:
             # Fallback when no categories: use cash-flow classification
-            cat = "Expense" if not _has_categories else "Uncategorized"
+            cat = "Expense" if not _has_categories else UNCATEGORIZED
         if "Transfer" in cat or cat.startswith("Income:") or cat == "Income":
             continue
         amt = abs(row["amount"])  # make positive for display
@@ -333,7 +334,7 @@ def build_dashboard_json(
             txn_id = row.get("txn_id", "")
             cat = categories.get(txn_id, "")
             if not cat:
-                cat = "Expense" if not _has_categories else "Uncategorized"
+                cat = "Expense" if not _has_categories else UNCATEGORIZED
             if "Transfer" in cat or cat.startswith("Income:") or cat == "Income":
                 continue
             # Use subtype as the trend key

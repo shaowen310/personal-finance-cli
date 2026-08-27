@@ -712,6 +712,7 @@ def analyze_statement(raw: dict[str, Any], meta: dict[str, Any],
 # Report rendering — delegated to render_md.py
 # ---------------------------------------------------------------------------
 
+from pfa_analysis.categorize import UNCATEGORIZED  # noqa: E402
 from pfa_analysis.render_md import render_report, fmt  # noqa: E402
 
 # Demo data (default schema, single currency)
@@ -778,7 +779,7 @@ def build_income_expense_drilldowns(
         cat_cls, cat_sub = _split_cat(cat_full) if cat_full else ("", "")
 
         if cat_cls == "Expense":
-            cat_disp = cat_sub or cat_full or "Uncategorized"
+            cat_disp = cat_sub or cat_full or UNCATEGORIZED
             exp_ccy[cat_disp][row["currency"]] += float(row["amount"])
             exp_txns[cat_disp].append({
                 "date": str(row.get("date", "")),
@@ -790,7 +791,7 @@ def build_income_expense_drilldowns(
                 "account_type": str(row.get("account_type", "")),
             })
         elif cat_cls == "Income":
-            src = cat_sub or cat_full or "Uncategorized"
+            src = cat_sub or cat_full or UNCATEGORIZED
             src_ccy[src][row["currency"]] += abs(float(row["amount"]))
             src_txns[src].append({
                 "date": str(row.get("date", "")),
@@ -809,7 +810,7 @@ def build_income_expense_drilldowns(
             # classification to assign to income or expense.
             flow = classify_cash_flow(row)
             if flow == "Income":
-                src = cat_sub or cat_full or "Uncategorized"
+                src = cat_sub or cat_full or UNCATEGORIZED
                 src_ccy[src][row["currency"]] += abs(float(row["amount"]))
                 src_txns[src].append({
                     "date": str(row.get("date", "")),
@@ -821,7 +822,7 @@ def build_income_expense_drilldowns(
                     "account_type": str(row.get("account_type", "")),
                 })
             elif flow == "Expense":
-                cat_disp = cat_sub or cat_full or "Uncategorized"
+                cat_disp = cat_sub or cat_full or UNCATEGORIZED
                 exp_ccy[cat_disp][row["currency"]] += float(row["amount"])
                 exp_txns[cat_disp].append({
                     "date": str(row.get("date", "")),
