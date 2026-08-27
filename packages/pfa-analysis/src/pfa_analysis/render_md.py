@@ -75,12 +75,14 @@ def _render_txn_detail_table(out: list[str], entries: list[dict[str, Any]], key:
         else:
             out.append("| Date | Institution | Account | Account Type | Description | CCY | OC |")
             out.append("|---|---|---|---|---|---:|---:|")
+        entry_sgd_total = 0.0
         for t in txns:
             desc = t["description"].strip().replace("|", "\\|")
             ccy = t.get("currency", "")
             oc = fmt(t["amount"])
             if use_fx:
                 sgd = convert_to_sgd(t["amount"], ccy, fx_rates)
+                entry_sgd_total += sgd or 0.0
                 out.append(
                     f"| {t['date']} | {t.get('bank', '')} | {t.get('account', '')} | "+
                     f"{t.get('account_type', '')} | {desc} | {ccy} | {oc} | {fmt(sgd)} |"
@@ -90,6 +92,10 @@ def _render_txn_detail_table(out: list[str], entries: list[dict[str, Any]], key:
                     f"| {t['date']} | {t.get('bank', '')} | {t.get('account', '')} | "+
                     f"{t.get('account_type', '')} | {desc} | {ccy} | {oc} |"
                 )
+        if use_fx:
+            out.append(
+                f"| | | | | **Total SGD Eq.** | | | **{fmt(entry_sgd_total)}** |"
+            )
         out.append("\n")
 
 
