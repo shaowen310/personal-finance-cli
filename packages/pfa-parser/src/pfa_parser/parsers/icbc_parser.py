@@ -527,23 +527,33 @@ def _parse_ca_txn_line(
         # from the balance movement relative to the previous row.
         balance = amounts[-1]
         amount_str = amounts[0]
-        try:
-            amt_val = float(amount_str.replace(",", ""))
-            bal_val = float(balance.replace(",", ""))
-            is_withdrawal = (
-                prev_balance is not None and bal_val < prev_balance
-            )
-        except ValueError:
-            is_withdrawal = False
-        if is_withdrawal:
-            withdrawal = amount_str
+        # A negative value in the amount slot denotes a withdrawal
+        # (e.g. a reversal/correction). Normalize it to a positive
+        # withdrawal rather than leaving a meaningless negative deposit.
+        if amount_str.strip().startswith("-"):
+            withdrawal = amount_str.lstrip("-")
         else:
-            deposit = amount_str
+            try:
+                amt_val = float(amount_str.replace(",", ""))
+                bal_val = float(balance.replace(",", ""))
+                is_withdrawal = (
+                    prev_balance is not None and bal_val < prev_balance
+                )
+            except ValueError:
+                is_withdrawal = False
+            if is_withdrawal:
+                withdrawal = amount_str
+            else:
+                deposit = amount_str
     elif len(amounts) >= 3:
         # Deposit / Withdrawal / Balance columns explicitly present.
         balance = amounts[-1]
-        deposit = amounts[0]
-        withdrawal = amounts[1]
+        # Normalize a negative deposit to a positive withdrawal.
+        if amounts[0].strip().startswith("-"):
+            withdrawal = amounts[0].lstrip("-")
+        else:
+            deposit = amounts[0]
+        withdrawal = withdrawal or amounts[1]
 
     return CATxnRow(
         date=date_str,
