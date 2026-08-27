@@ -267,20 +267,50 @@ def render_report(result: dict[str, Any], consolidated: bool = False,
         out.append("")
 
     # ---- 3. Cash Flow Statement ----------------------------------------------
+    # Transposed layout (mirrors the Balance Sheet): cash-flow line items as
+    # rows, one column per currency, final column = SGD Equivalent. Outflows
+    # (Expense, Transfer Out) and the derived net figures are shown with their
+    # natural sign (outflows negative).
     out.append("## 3. Cash Flow Statement\n")
     if mbc:
-        for ccy in sorted(mbc):
-            m = mbc[ccy]
-            out.append(f"### {ccy}\n")
-            out.append("| Class | Inflow (+) | Outflow (\u2212) |")
-            out.append("|---|---:|---:|")
-            out.append(f"| Income | {fmt(m['income'])} | |")
-            out.append(f"| Transfer In | {fmt(m['transfer_in'])} | |")
-            out.append(f"| Expense | | {fmt(m['expense'])} |")
-            out.append(f"| Transfer Out | | {fmt(m['transfer_out'])} |")
-            out.append(f"| **Net Operating** (Income \u2212 Expense) | | **{fmt(m['net_operating'])}** |")
-            out.append(f"| **Net Change in Cash** | | **{fmt(m['net_change_cash'])}** |")
-            out.append("")
+        cf_ccies = sorted(mbc)
+        # One row per cash-flow line item, each spanning all currency columns.
+        # (label, {ccy: signed_value}, bold?)
+        cf_rows: list[tuple[str, dict[str, float], bool]] = [
+            ("Income", {c: mbc[c]["income"] for c in cf_ccies}, False),
+            ("Transfer In", {c: mbc[c]["transfer_in"] for c in cf_ccies}, False),
+            ("Expense", {c: -mbc[c]["expense"] for c in cf_ccies}, False),
+            ("Transfer Out", {c: -mbc[c]["transfer_out"] for c in cf_ccies}, False),
+            ("Net Operating", {c: mbc[c]["net_operating"] for c in cf_ccies}, True),
+            ("Net Change in Cash", {c: mbc[c]["net_change_cash"] for c in cf_ccies}, True),
+        ]
+
+        header_parts = ["| Cash Flow"]
+        for c in cf_ccies:
+            header_parts.append(c)
+        if use_fx:
+            header_parts.append("SGD Eq.")
+        out.append(" | ".join(header_parts) + " |")
+        sep_parts = ["|---"]
+        for _ in cf_ccies:
+            sep_parts.append("---:")
+        if use_fx:
+            sep_parts.append("---:")
+        out.append(" | ".join(sep_parts) + " |")
+
+        for label, by_ccy, bold in cf_rows:
+            cf_vals: list[str] = [f"**{label}**" if bold else label]
+            row_sgd = 0.0
+            for c in cf_ccies:
+                v = by_ccy.get(c, 0.0)
+                cf_vals.append(fmt(v))
+                if use_fx:
+                    s = convert_to_sgd(v, c, fx_rates) or 0.0
+                    row_sgd += s
+            if use_fx:
+                cf_vals.append(fmt(row_sgd))
+            out.append(" | ".join(cf_vals) + " |")
+        out.append("")
     else:
         out.append("_Not applicable \u2014 statement has no transactions._\n")
 
