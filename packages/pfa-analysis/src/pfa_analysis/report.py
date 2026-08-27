@@ -90,13 +90,26 @@ def render_consolidated_report(
     """
     result = _analyze_file(consolidated_path, start_date, end_date)
     raw = json.loads(consolidated_path.read_text(encoding="utf-8"))
-    fx_rates = _extract_consolidated_fx(raw)
-    # Fallback: a consolidated IR may not embed FX rates. Fetch the period-end
-    # rate so SGD conversion still works for the consolidated report.
-    if fx_rates is None and result["meta"].get("_consolidated"):
-        period_end = parse_date_to_iso(result["meta"].get("period_end"))
-        if period_end:
-            fx_rates = fetch_fx_rates(period_end)
+    # FX rate selection:
+    #  - When a cut-off window is supplied, value FX as of the cut-off end date
+    #    (or start date if no end) so the SGD column is consistent with the
+    #    filtered balances ("as of 0731" uses the 0731 rate, not the IR's
+    #    build-date snapshot).
+    #  - Otherwise prefer the IR's embedded FX snapshot; fall back to the
+    #    statement period-end rate only if the IR has no embedded FX.
+    if end_date:
+        # A cut-off end date is supplied → value FX as of that date so the SGD
+        # column is consistent with the filtered balances ("as of 0731" uses the
+        # 0731 rate, not the IR's build-date snapshot). start_date alone does not
+        # define an "as of" point, so it falls through to the default path.
+        fx_cutoff = parse_date_to_iso(end_date)
+        fx_rates = fetch_fx_rates(fx_cutoff) if fx_cutoff else None
+    else:
+        fx_rates = _extract_consolidated_fx(raw)
+        if fx_rates is None and result["meta"].get("_consolidated"):
+            period_end = parse_date_to_iso(result["meta"].get("period_end"))
+            if period_end:
+                fx_rates = fetch_fx_rates(period_end)
     if fx_rates:
         print(f"FX rates: {fx_rates['date']} from {fx_rates['source']}")
 
