@@ -254,8 +254,13 @@ def render_report(result: dict[str, Any], consolidated: bool = False,
                 )
                 csum_all += cs
                 csum_sgd_all += cs_sgd
+            # The bucket-level OC total sums across currencies, which is
+            # meaningless (you cannot add SGD + JPY). Show only the SGD
+            # equivalent total; leave the OC cell as a non-applicable dash.
+            n_ccy = len(ccy_sgd)
+            oc_total_cell = "—" if n_ccy > 1 else fmt(csum_all)
             out.append(
-                f"| **{bucket} total** | | | | | **{fmt(csum_all)}** | **{fmt(csum_sgd_all)}** |"
+                f"| **{bucket} total** | | | | | **{oc_total_cell}** | **{fmt(csum_sgd_all)}** |"
             )
             out.append("")
 
