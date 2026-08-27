@@ -62,10 +62,17 @@ class ICBCExtractor(BaseExtractor):
         # ICBC repeats the same account number across currencies, so key on the
         # currency too to avoid replicating every currency's transactions.
         ca_by_key: "OrderedDict[tuple[str, str], list[CATxnRow]]" = OrderedDict()
+        # Capture B/F (brought-forward) balances separately, since those rows
+        # are excluded from the transaction list below but still carry the
+        # explicit opening balance we want to set on the account.
+        bf_by_key: "dict[tuple[str, str], CATxnRow]" = {}
         for t in ca_txns:
-            if t.get("is_bf") or t.get("is_total"):
-                continue  # skip B/F and Total rows
+            if t.get("is_total"):
+                continue  # skip Total summary rows
             key = (str(t.get("acct_no", "")), str(t.get("ccy", "SGD")))
+            if t.get("is_bf"):
+                bf_by_key.setdefault(key, t)  # keep first B/F per (acct, ccy)
+                continue
             ca_by_key.setdefault(key, []).append(t)
 
         for row in ca_summary:
@@ -75,10 +82,10 @@ class ICBCExtractor(BaseExtractor):
             # The B/F (brought-forward) transaction row is ICBC's explicit
             # opening balance for this (account, currency). Use it directly
             # instead of deriving opening_balance downstream.
-            bf_txns = [t for t in txns if t.get("is_bf")]
+            bf_txn = bf_by_key.get((acct_no, ccy))
             opening_balance = None
-            if bf_txns:
-                bf_bal = str(bf_txns[0].get("balance", "") or "").replace(",", "")
+            if bf_txn is not None:
+                bf_bal = str(bf_txn.get("balance", "") or "").replace(",", "")
                 opening_balance = float(bf_bal) if bf_bal else None
             _ = builder.add_account(
                 name=str(row.get("acct_type", "Current Account")),
