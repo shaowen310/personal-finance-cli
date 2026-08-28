@@ -164,25 +164,90 @@ def _own_account_digits(accounts: list[dict[str, Any]]) -> set[str]:
     return digits
 
 
-def _is_self_reference(description: str, own_digits: set[str]) -> bool:
-    """True if a transaction description references one of the user's own
-    account numbers — i.e. it is a transfer between the user's own accounts
-    (inter-account moves) even when the consolidation module did not flag it
-    ``is_internal_transfer``.
+def _self_reference_accounts(description: str, own_digits: set[str]) -> set[str]:
+    """Return the set of the user's own account numbers (digit-only) that appear
+    as a *whole* digit run in ``description``.
 
-    Matching is deliberately strict: an account number must appear as a *whole*
-    digit run, not as a substring buried inside a longer transaction-reference
-    number. A naive substring check would, e.g., match a 10-digit account number
-    inside a 20-digit payment reference and falsely flag the row. (FX / currency
-    conversions are handled by the consolidation module, which links them with
-    ``mark_internal=False``, so they are never flagged here.)
+    A description referencing one of the user's own account numbers is a candidate
+    inter-account transfer (even when the consolidation module did not flag it
+    ``is_internal_transfer``). Matching is deliberately strict: an account number
+    must appear as a contiguous digit run, not as a substring buried inside a
+    longer transaction-reference number — a naive substring check would, e.g.,
+    match a 10-digit account number inside a 20-digit payment reference.
+
+    Returns the *set* of matched account numbers (may be empty) rather than a bare
+    bool, so callers can validate the match against a partner leg (see
+    ``_promote_internal_transfers``).
     """
     if not description or not own_digits:
-        return False
-    # Extract contiguous digit runs and match them exactly against known
-    # account numbers.
-    digit_runs = re.findall(r"\d+", description)
-    return any(run == no for run in digit_runs for no in own_digits)
+        return set()
+    digit_runs = set(re.findall(r"\d+", description))
+    return {no for no in own_digits if no in digit_runs}
+
+
+def _promote_internal_transfers(
+    rows: list[dict[str, Any]],
+    own_digits: set[str],
+    amount_key: str = "amount",
+    desc_key: str = "description",
+    flag_key: str = "is_internal_transfer",
+    tol: float = 0.01,
+) -> None:
+    """Finalize ``is_internal_transfer`` for rows that were *candidate* internal
+    transfers (description references an own account number) but not explicitly
+    flagged by the consolidator.
+
+    Root-cause fix (Strategy A): an internal transfer is a *relationship* between
+    two legs, not a property of a single description. A lone ``Misc Debit … 8995976591``
+    whose reference number merely coincides with an own account number must NOT be
+    promoted to a transfer unless an opposite-sign, equal-magnitude partner leg
+    referencing the same account number exists elsewhere in the same IR. Requiring
+    the partner prevents the false-positive self-reference gap (e.g. a phantom
+    −100.00 transfer with no +100.00 inbound).
+
+    Mutates ``rows`` in place: rows already ``flag_key=True`` are left untouched
+    (the consolidator is authoritative); candidate rows are promoted only when a
+    valid partner is found.
+    """
+    # Index candidate-self-reference rows by the matched account number.
+    by_acct: dict[str, list[int]] = {}
+    ref_accounts: list[set[str]] = []
+    for i, r in enumerate(rows):
+        if r.get(flag_key):
+            ref_accounts.append(set())  # already internal; not a candidate
+            continue
+        matched = _self_reference_accounts(str(r.get(desc_key, "")), own_digits)
+        ref_accounts.append(matched)
+        for acct_no in matched:
+            by_acct.setdefault(acct_no, []).append(i)
+
+    if not by_acct:
+        return
+
+    for i, r in enumerate(rows):
+        matched = ref_accounts[i]
+        if not matched or r.get(flag_key):
+            continue
+        amt = float(r.get(amount_key, 0.0))
+        promoted = False
+        for acct_no in matched:
+            for j in by_acct.get(acct_no, []):
+                if j == i:
+                    continue
+                partner = rows[j]
+                # The partner need not already be flagged: a genuine internal
+                # transfer is a pair of legs that both reference the same own
+                # account with opposite sign and equal magnitude. Either leg may
+                # be the candidate here.
+                if not partner.get(flag_key) and acct_no not in ref_accounts[j]:
+                    continue
+                p_amt = float(partner.get(amount_key, 0.0))
+                if amt * p_amt < 0 and abs(abs(amt) - abs(p_amt)) <= tol:
+                    promoted = True
+                    break
+            if promoted:
+                break
+        r[flag_key] = promoted
 
 
 def _load_consolidated_ir(data: dict[str, Any], path: Path,
@@ -210,12 +275,11 @@ def _load_consolidated_ir(data: dict[str, Any], path: Path,
                 if end_date and posted > end_date:
                     continue
             desc = str(t.get("description", "")).strip()
-            # A row is an internal transfer if the consolidator flagged it
-            # is_internal_transfer, or it references one of the user's own
-            # accounts (even when the consolidator missed it). The consolidation
-            # module links currency conversions with mark_internal=False, so they
-            # never arrive labelled as an internal transfer.
-            is_internal = bool(t.get("is_internal_transfer", False)) or _is_self_reference(desc, own_digits)
+            # Start from the consolidator's authoritative flag only. Description-
+            # based self-reference promotion is deferred to _promote_internal_transfers,
+            # which validates that an opposite-sign, equal-magnitude partner leg
+            # exists (prevents false-positive self-reference gaps).
+            is_internal = bool(t.get("is_internal_transfer", False))
             txns.append({
                 "date": str(t.get("posted_date", t.get("value_date", ""))),
                 "description": desc,
@@ -225,6 +289,9 @@ def _load_consolidated_ir(data: dict[str, Any], path: Path,
                 "is_internal_transfer": is_internal,
                 "balance_after": parse_num(t.get("balance_after")),
             })
+    # Promote candidate self-reference rows only when a valid partner leg exists.
+    _promote_internal_transfers(txns, own_digits, amount_key="amount",
+                                desc_key="description", flag_key="is_internal_transfer")
     return meta, txns
 
 
@@ -1150,9 +1217,9 @@ def _load_ir_with_txn_id(path: Path,
                     if end_date and posted > end_date:
                         continue
                 desc = str(txn.get("description", "")).strip()
-                is_internal = bool(txn.get("is_internal_transfer", False)) or _is_self_reference(desc, own_digits)
-                if is_internal and not keep_internal:
-                    continue
+                # Start from the consolidator's authoritative flag only; defer
+                # self-reference promotion to the validated pass below.
+                is_internal = bool(txn.get("is_internal_transfer", False))
                 rows.append({
                     "txn_id": str(txn.get("txn_id", "")),
                     "date": str(txn.get("posted_date", txn.get("value_date", ""))),
@@ -1165,6 +1232,11 @@ def _load_ir_with_txn_id(path: Path,
                     "account": acct_no,
                     "is_internal_transfer": is_internal,
                 })
+        # Promote candidate self-reference rows only when a valid partner leg exists.
+        _promote_internal_transfers(rows, own_digits, amount_key="amount",
+                                    desc_key="description", flag_key="is_internal_transfer")
+        if not keep_internal:
+            rows = [r for r in rows if not r["is_internal_transfer"]]
         return meta, rows
 
     # Old format: flat transactions[]
