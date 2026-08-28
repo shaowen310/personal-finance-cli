@@ -1,0 +1,10 @@
+{
+  "python.testing.pytestEnabled": true,
+  "python.testing.pytestArgs": [
+    "-c",
+    "pyproject.toml",
+    "--rootdir",
+    "${workspaceFolder}"
+  ],
+  "python.testing.cwd": "${workspaceFolder}"
+}
