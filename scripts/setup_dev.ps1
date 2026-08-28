@@ -4,6 +4,8 @@ Write-Host "Installing pfa-ir-schema (leaf dependency, must go first)..."
 pip install -e (Join-Path $RepoRoot "packages/pfa-ir-schema")
 Write-Host "Installing pfa-fx (leaf FX dependency)..."
 pip install -e (Join-Path $RepoRoot "packages/pfa-fx")
+Write-Host "Installing pfa-ir-verifier..."
+pip install -e (Join-Path $RepoRoot "packages/pfa-ir-verifier")
 Write-Host "Installing pfa-parser..."
 pip install -e (Join-Path $RepoRoot "packages/pfa-parser")
 Write-Host "Installing pfa-ir-consolidator..."

@@ -14,6 +14,7 @@ packages/
 ├── pfa-parser/            # Bank statement PDF parser (detect → extract → IR)
 ├── pfa-fx/                # FX rate retrieval & SGD conversion (stdlib-only)
 ├── pfa-ir-consolidator/   # IR data consolidation & transfer detection
+├── pfa-ir-verifier/       # IR verification (internal-transfer reconciliation)
 └── pfa-analysis/          # Categorization, financial analysis & reporting
 apps/
 └── pfa-cli/               # CLI entry point + workflow orchestration
@@ -31,6 +32,41 @@ bash scripts/setup_dev.sh
 # Verify installation
 pfa --help
 ```
+
+## Development Install
+
+All packages are installed in **editable mode** (`pip install -e`), so changes
+to the source are picked up without reinstalling. Requires **Python >= 3.12**.
+
+**Option A — setup script (recommended):** installs every package in the
+correct dependency order (`pfa-ir-schema` → `pfa-fx` → `pfa-parser` →
+`pfa-ir-consolidator` → `pfa-analysis` → `pfa-cli`).
+
+```bash
+# Windows
+powershell -File scripts/setup_dev.ps1
+
+# macOS / Linux
+bash scripts/setup_dev.sh
+```
+
+**Option B — manual:** create a virtual environment first (recommended), then
+install each package from the repo root.
+
+```bash
+python -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
+
+pip install -e packages/pfa-ir-schema
+pip install -e packages/pfa-fx
+pip install -e packages/pfa-ir-verifier
+pip install -e packages/pfa-parser
+pip install -e packages/pfa-ir-consolidator
+pip install -e packages/pfa-analysis
+pip install -e apps/pfa-cli
+```
+
+After either option, verify with `pfa --help`.
 
 ## Commands
 
@@ -68,6 +104,8 @@ pfa-ir-schema          (shared data models)
 pfa-parser             (PDF extraction, all SG bank support)
     ↑
 pfa-ir-consolidator    (merge & deduplicate IR, detect transfers)
+    ↑
+pfa-ir-verifier        (IR verification: internal-transfer reconciliation)
     ↑
 pfa-analysis           (categorization, financial reports & visualization)
     ↑
