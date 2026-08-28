@@ -11,7 +11,7 @@ Public API
 * :class:`IrVerificationReport` — structured result of a verification run.
 * :func:`find_internal_transfer_orphans` — read-only check; finds internal
   transfers that have no equal-magnitude opposite leg.
-* :func:`reconcile_internal_transfers` — fixer; demotes orphan internal-flagged
+* :func:`demote_orphan_internal_transfers` — fixer; demotes orphan internal-flagged
   rows in place and returns what changed.
 * :func:`promote_internal_transfers` — fixer; promotes description-based
   self-reference rows to internal transfers only when a valid partner leg exists.
@@ -193,7 +193,7 @@ def find_internal_transfer_orphans(
     )
 
 
-def reconcile_internal_transfers(
+def demote_orphan_internal_transfers(
     ir: ParsedStatement | dict[str, Any] | list[Any],
 ) -> IrVerificationReport:
     """Fixer: demote orphan internal-flagged rows in place.
@@ -245,6 +245,9 @@ def promote_internal_transfers(
     amount_key: str = "amount",
     desc_key: str = "description",
     flag_key: str = "is_internal_transfer",
+    txn_id_key: str = "txn_id",
+    links_key: str = "linked_txn_ids",
+    labels_key: str = "link_labels",
     tol: float = 0.01,
 ) -> None:
     """Finalize ``is_internal_transfer`` for candidate self-reference rows.
@@ -260,6 +263,14 @@ def promote_internal_transfers(
     This is the canonical owner of self-reference promotion; it was relocated from
     ``pfa-analysis`` so that all internal-transfer reconciliation lives in
     ``pfa-ir-verifier``.
+
+    Promotion also **cross-links** the discovered pair (sets ``linked_txn_ids``
+    bidirectionally and appends a ``"self_reference"`` label on both legs). This
+    makes promoted transfers first-class links, consistent with the pairs produced
+    by ``detect_transfers``, so a subsequent ``verify_txn_links`` pass will *not*
+    flag them as orphaned ("transfer without linked twin"). Rows lacking a
+    usable ``txn_id`` (e.g. some parser outputs) are still promoted by flag but
+    left unlinked, since a link needs an id to resolve.
 
     Mutates ``rows`` in place: rows already ``flag_key=True`` are left untouched
     (the consolidator is authoritative); candidate rows are promoted only when a
@@ -286,24 +297,41 @@ def promote_internal_transfers(
             continue
         amt = float(r.get(amount_key, 0.0))
         promoted = False
+        partner: dict[str, Any] | None = None
         for acct_no in matched:
             for j in by_acct.get(acct_no, []):
                 if j == i:
                     continue
-                partner = rows[j]
+                cand = rows[j]
                 # The partner need not already be flagged: a genuine internal
                 # transfer is a pair of legs that both reference the same own
                 # account with opposite sign and equal magnitude. Either leg may
                 # be the candidate here.
-                if not partner.get(flag_key) and acct_no not in ref_accounts[j]:
+                if not cand.get(flag_key) and acct_no not in ref_accounts[j]:
                     continue
-                p_amt = float(partner.get(amount_key, 0.0))
+                p_amt = float(cand.get(amount_key, 0.0))
                 if amt * p_amt < 0 and abs(abs(amt) - abs(p_amt)) <= tol:
                     promoted = True
+                    partner = cand
                     break
             if promoted:
                 break
-        r[flag_key] = promoted
+        if not promoted or partner is None:
+            continue
+        r[flag_key] = True
+        # Cross-link the partner pair so downstream link verification treats it
+        # as a proper internal transfer.
+        id_i = str(r.get(txn_id_key, "") or "").strip()
+        id_j = str(partner.get(txn_id_key, "") or "").strip()
+        if id_i and id_j:
+            if id_j not in r.setdefault(links_key, []):
+                r[links_key] = list(r[links_key]) + [id_j]
+            if "self_reference" not in r.setdefault(labels_key, []):
+                r[labels_key] = list(r[labels_key]) + ["self_reference"]
+            if id_i not in partner.setdefault(links_key, []):
+                partner[links_key] = list(partner[links_key]) + [id_i]
+            if "self_reference" not in partner.setdefault(labels_key, []):
+                partner[labels_key] = list(partner[labels_key]) + ["self_reference"]
 
 
 def verify_txn_links(statement: ParsedStatement) -> ParsedStatement:

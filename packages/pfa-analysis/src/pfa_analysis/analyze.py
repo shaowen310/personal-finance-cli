@@ -40,10 +40,7 @@ from typing import Any
 # Internal-transfer reconciliation (and self-reference promotion) lives in the
 # standalone pfa-ir-verifier package so it can be run independently (e.g. CI)
 # without the analysis stack.
-from pfa_ir_verifier import (
-    promote_internal_transfers as _promote_internal_transfers,
-    reconcile_internal_transfers as _reconcile_internal_transfers,
-)
+from pfa_ir_verifier import demote_orphan_internal_transfers, promote_internal_transfers
 
 
 # ---------------------------------------------------------------------------
@@ -194,7 +191,7 @@ def _load_consolidated_ir(data: dict[str, Any], path: Path,
                     continue
             desc = str(t.get("description", "")).strip()
             # Start from the consolidator's authoritative flag only. Description-
-            # based self-reference promotion is deferred to _promote_internal_transfers,
+            # based self-reference promotion is deferred to promote_internal_transfers,
             # which validates that an opposite-sign, equal-magnitude partner leg
             # exists (prevents false-positive self-reference gaps).
             is_internal = bool(t.get("is_internal_transfer", False))
@@ -206,9 +203,12 @@ def _load_consolidated_ir(data: dict[str, Any], path: Path,
                 "account_type": acct_type,
                 "is_internal_transfer": is_internal,
                 "balance_after": parse_num(t.get("balance_after")),
+                "txn_id": str(t.get("txn_id", "") or ""),
+                "linked_txn_ids": list(t.get("linked_txn_ids", []) or []),
+                "link_labels": list(t.get("link_labels", []) or []),
             })
     # Promote candidate self-reference rows only when a valid partner leg exists.
-    _promote_internal_transfers(txns, own_digits, amount_key="amount",
+    promote_internal_transfers(txns, own_digits, amount_key="amount",
                                 desc_key="description", flag_key="is_internal_transfer")
     return meta, txns
 
@@ -648,7 +648,7 @@ def _analyze_consolidated(raw: dict[str, Any], meta: dict[str, Any],
     ``start_date``/``end_date``), account-summary balances are ignored and
     opening/closing are derived from the filtered transaction stream instead.
     """
-    _reconcile_internal_transfers(txns)
+    demote_orphan_internal_transfers(txns)
     by_ccy: dict[str, list[Txn]] = defaultdict(list)
     for t in txns:
         by_ccy[t["currency"]].append(t)
@@ -718,7 +718,7 @@ def analyze_statement(raw: dict[str, Any], meta: dict[str, Any],
     ``start_date``/``end_date``), statement-meta balances are ignored and
     opening/closing are derived from the filtered transaction stream instead.
     """
-    _reconcile_internal_transfers(txns)
+    demote_orphan_internal_transfers(txns)
     by_ccy: dict[str, list[Txn]] = defaultdict(list)
     for t in txns:
         by_ccy[t["currency"]].append(t)
@@ -1151,7 +1151,7 @@ def _load_ir_with_txn_id(path: Path,
                     "is_internal_transfer": is_internal,
                 })
         # Promote candidate self-reference rows only when a valid partner leg exists.
-        _promote_internal_transfers(rows, own_digits, amount_key="amount",
+        promote_internal_transfers(rows, own_digits, amount_key="amount",
                                     desc_key="description", flag_key="is_internal_transfer")
         if not keep_internal:
             rows = [r for r in rows if not r["is_internal_transfer"]]

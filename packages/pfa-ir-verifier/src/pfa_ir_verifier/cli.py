@@ -17,7 +17,7 @@ import json
 import sys
 from pathlib import Path
 
-from .verify import reconcile_internal_transfers, verify_ir
+from .verify import demote_orphan_internal_transfers, verify_ir
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -40,10 +40,10 @@ def main(argv: list[str] | None = None) -> int:
 def _cmd_verify(ir_path: str, *, fix: bool, as_json: bool) -> int:
     path = Path(ir_path)
     if fix:
-        # Load once, reconcile in place, persist the healed ParsedStatement.
+        # Load once, demote orphan internal transfers in place, persist the healed ParsedStatement.
         from pfa_ir_schema import from_json
         stmt = from_json(path.read_text(encoding="utf-8"))
-        report = reconcile_internal_transfers(stmt)
+        report = demote_orphan_internal_transfers(stmt)
         if not report.ok:
             path.write_text(stmt.to_json(), encoding="utf-8")
     else:

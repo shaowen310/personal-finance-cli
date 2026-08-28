@@ -12,6 +12,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -28,9 +29,34 @@ from pfa_ir_consolidator.detect_transfers import (  # noqa: E402
     detect_inter_bank_transfers,
     detect_intra_bank_transfers,
 )
+# Internal-transfer verification (promotion, link integrity, orphan reconcile)
+# now lives in pfa-ir-verifier — the canonical home for all IR verification.
+# Apply the full ordered pipeline here so the persisted consolidated IR already
+# carries correct flags/links and any surviving orphans are demoted.
+from pfa_ir_verifier import (  # noqa: E402
+    demote_orphan_internal_transfers,
+    promote_internal_transfers,
+    verify_txn_links,
+)
 
 VERSION = "0.1.0"
 DEFAULT_MIN_IR_VERSION = "2026.4"
+
+
+def _own_account_digits(accounts: list[Any]) -> set[str]:
+    """Return the digit-only forms of every account number across ``accounts``.
+
+    Used by self-reference promotion to recognise descriptions that reference
+    one of the user's own accounts (a candidate inter-account transfer even when
+    the detector did not flag it).
+    """
+    digits: set[str] = set()
+    for acc in accounts:
+        no = (getattr(acc, "account_no", "") or "").strip()
+        if no:
+            digits.add(re.sub(r"\D", "", no))
+    digits.discard("")
+    return digits
 
 
 def _version_ge(a: str, b: str) -> bool:
@@ -190,6 +216,37 @@ def consolidate_statements(
             )
         )
 
+    # Post-pass: promote description-based self-reference rows to internal
+    # transfers. The detector only flags transfers it could actually link; some
+    # genuine own-account moves (e.g. a generic "Transfer" whose legs weren't
+    # auto-paired) carry an own account number in the description but no flag.
+    # promote_internal_transfers upgrades them in memory only when a matching
+    # opposite-leg partner exists, preventing false-positive self-references,
+    # and cross-links the pair so it is a first-class transfer. Running it here
+    # means the persisted consolidated IR already carries the correct flags and
+    # links. Transactions in ``txns`` are the live objects, so we promote on a
+    # parallel dict view and copy the flag / links / labels back.
+    own_digits = _own_account_digits(merged_accounts)
+    if own_digits:
+        flat_rows: list[dict[str, Any]] = []
+        row_txn: list[Any] = []
+        for acc in merged_accounts:
+            for t in acc.transactions:
+                flat_rows.append({
+                    "amount": float(t.amount),
+                    "description": str(t.description or ""),
+                    "is_internal_transfer": bool(t.is_internal_transfer),
+                    "txn_id": t.txn_id,
+                    "linked_txn_ids": list(t.linked_txn_ids or []),
+                    "link_labels": list(t.link_labels or []),
+                })
+                row_txn.append(t)
+        promote_internal_transfers(flat_rows, own_digits)
+        for row, t in zip(flat_rows, row_txn):
+            t.is_internal_transfer = row["is_internal_transfer"]
+            t.linked_txn_ids = list(row["linked_txn_ids"])
+            t.link_labels = list(row["link_labels"])
+
     periods_from = [
         s.statement_meta.period_from
         for _, s in stmts_with_paths
@@ -256,6 +313,15 @@ def consolidate_statements(
             }
         },
     )
+
+    # Ordered internal-transfer verification pipeline (runs after detect_transfers
+    # + the promotion post-pass above, all on the consolidated IR):
+    #   1. promote_internal_transfers  -- recover unlinked own-account pairs (done on merged_accounts above; == consolidated.accounts)
+    #   2. verify_txn_links           -- link-integrity check on the finalized IR (promoted pairs are cross-linked, so not falsely orphaned)
+    #   3. demote_orphan_internal_transfers -- demote any flagged row still lacking a partner leg
+    # Running these here means the persisted consolidated IR is fully reconciled.
+    verify_txn_links(consolidated)
+    demote_orphan_internal_transfers(consolidated)
     return consolidated, total_txns_in, deduped, filtered
 
 

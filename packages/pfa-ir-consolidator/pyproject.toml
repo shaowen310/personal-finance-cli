@@ -10,6 +10,7 @@ requires-python = ">=3.12"
 dependencies = [
     "pfa-ir-schema>=0.1.0",
     "pfa-parser>=0.1.0",
+    "pfa-ir-verifier>=0.1.0",
     "pfa-fx>=0.1.0",
     "pyyaml>=6.0",
 ]
