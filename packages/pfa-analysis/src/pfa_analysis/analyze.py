@@ -267,7 +267,7 @@ def _load_ir(data: dict[str, Any]) -> tuple[dict[str, Any], list[Txn]]:
 
 TRANSFER_KEYWORDS = [
     "FUNDS TRANSFER", "FDWD", "FIXED DEPOSIT", "TOP-UP TO PAYLAH",
-    "TIME DEPO", "ROLLOVER", "PAYMENT BY INTERNET",
+    "PAYMENT BY INTERNET",
 ]
 
 
@@ -289,6 +289,24 @@ def _is_debit(txn: Txn) -> bool:
     if at in _CREDIT_LIKE_ACCOUNTS:
         return txn["amount"] > 0
     return txn["amount"] < 0
+
+
+def _expense_contrib(amount: float, account_type: str) -> float:
+    """Signed expense (outflow) contribution for one row.
+
+    Asset-side expenses are stored negative and liability-side (credit-card)
+    expenses are stored positive, so the true outflow is ``-amount`` on the
+    asset side and ``+amount`` on the liability side. Refund rows net out
+    automatically (a credit-card refund is stored negative -> -amount < 0).
+    """
+    at = str(account_type).lower()
+    return -amount if at not in _CREDIT_LIKE_ACCOUNTS else amount
+
+
+def _income_contrib(amount: float, account_type: str) -> float:
+    """Signed income (inflow) contribution for one row (opposite sign rule)."""
+    at = str(account_type).lower()
+    return amount if at not in _CREDIT_LIKE_ACCOUNTS else -amount
 
 
 def classify_cash_flow(txn: Txn) -> str:
@@ -358,7 +376,12 @@ def compute_metrics(txns: list[Txn], meta: dict[str, Any], ccy: str,
     transfer_out_int = transfer_out_ext = 0.0
     for t in txns:
         c = classify_cash_flow(t)
-        a = abs(t["amount"])  # classify_cash_flow already set the direction
+        # Outflows (expense / transfer-out) are debits; inflows (income /
+        # transfer-in) are credits. The signed contribution depends on the
+        # account side (asset vs liability), per _expense_contrib / _income_contrib.
+        a = (_expense_contrib(t["amount"], t.get("account_type", ""))
+             if c in ("Expense", "Transfer Out")
+             else _income_contrib(t["amount"], t.get("account_type", "")))
         is_int = bool(t.get("is_internal_transfer", False))
         if c == "Income":
             income += a
@@ -811,11 +834,12 @@ def build_income_expense_drilldowns(
 
         if cat_cls == "Expense":
             cat_disp = cat_sub or cat_full or UNCATEGORIZED
-            exp_ccy[cat_disp][row["currency"]] += float(row["amount"])
+            amt = _expense_contrib(float(row["amount"]), row.get("account_type", ""))
+            exp_ccy[cat_disp][row["currency"]] += amt
             exp_txns[cat_disp].append({
                 "date": str(row.get("date", "")),
                 "description": str(row.get("description", "")),
-                "amount": abs(float(row["amount"])),
+                "amount": amt,
                 "currency": str(row.get("currency", "")),
                 "bank": str(row.get("bank", "")),
                 "account": str(row.get("account", "")),
@@ -823,11 +847,12 @@ def build_income_expense_drilldowns(
             })
         elif cat_cls == "Income":
             src = cat_sub or cat_full or UNCATEGORIZED
-            src_ccy[src][row["currency"]] += abs(float(row["amount"]))
+            amt_inc = _income_contrib(float(row["amount"]), row.get("account_type", ""))
+            src_ccy[src][row["currency"]] += amt_inc
             src_txns[src].append({
                 "date": str(row.get("date", "")),
                 "description": str(row.get("description", "")),
-                "amount": abs(float(row["amount"])),
+                "amount": amt_inc,
                 "currency": str(row.get("currency", "")),
                 "bank": str(row.get("bank", "")),
                 "account": str(row.get("account", "")),
@@ -842,11 +867,12 @@ def build_income_expense_drilldowns(
             flow = classify_cash_flow(row)
             if flow == "Income":
                 src = cat_sub or cat_full or UNCATEGORIZED
-                src_ccy[src][row["currency"]] += abs(float(row["amount"]))
+                amt_inc = _income_contrib(float(row["amount"]), row.get("account_type", ""))
+                src_ccy[src][row["currency"]] += amt_inc
                 src_txns[src].append({
                     "date": str(row.get("date", "")),
                     "description": str(row.get("description", "")),
-                    "amount": abs(float(row["amount"])),
+                    "amount": amt_inc,
                     "currency": str(row.get("currency", "")),
                     "bank": str(row.get("bank", "")),
                     "account": str(row.get("account", "")),
@@ -854,11 +880,12 @@ def build_income_expense_drilldowns(
                 })
             elif flow == "Expense":
                 cat_disp = cat_sub or cat_full or UNCATEGORIZED
-                exp_ccy[cat_disp][row["currency"]] += float(row["amount"])
+                amt = _expense_contrib(float(row["amount"]), row.get("account_type", ""))
+                exp_ccy[cat_disp][row["currency"]] += amt
                 exp_txns[cat_disp].append({
                     "date": str(row.get("date", "")),
                     "description": str(row.get("description", "")),
-                    "amount": abs(float(row["amount"])),
+                    "amount": amt,
                     "currency": str(row.get("currency", "")),
                     "bank": str(row.get("bank", "")),
                     "account": str(row.get("account", "")),
@@ -942,7 +969,7 @@ def build_transfer_drilldown(
         tr_txns[cat_disp].append({
             "date": str(row.get("date", "")),
             "description": str(row.get("description", "")),
-            "amount": abs(float(row["amount"])),
+            "amount": float(row["amount"]),
             "currency": str(row.get("currency", "")),
             "bank": str(row.get("bank", "")),
             "account": str(row.get("account", "")),

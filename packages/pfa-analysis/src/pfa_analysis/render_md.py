@@ -12,6 +12,7 @@ SGD-per-unit shape ``{"rates": {CCY: SGD per 1 unit}, "date": ..., "source": ...
 """
 from __future__ import annotations
 
+import math
 from collections import defaultdict
 from datetime import datetime
 from typing import Any
@@ -49,7 +50,7 @@ def fmt(v: float | None) -> str:
 
 def _render_txn_detail_table(out: list[str], entries: list[dict[str, Any]], key: str,
                              use_fx: bool,
-                             fx_rates: dict[str, Any] | None) -> None:
+                             fx_rates: dict[str, Any] | None) -> dict[str, float]:
     """Append a per-transaction detail table (used by the income, expense and
     transfer drill-downs) to ``out``.
 
@@ -61,8 +62,15 @@ def _render_txn_detail_table(out: list[str], entries: list[dict[str, Any]], key:
     ``entries`` is a list of drill-down entries; each entry's display heading
     comes from ``entry[key]`` and its rows from ``entry["transactions"]``. The
     table shows one row per transaction with ``CCY`` / ``OC`` (original-currency
-    amount) columns, plus an ``SGD Eq.`` column when ``use_fx`` is set.
+    amount, signed so refund rows display negative and net correctly) columns,
+    plus an ``SGD Eq.`` column when ``use_fx`` is set.
+
+    Returns a mapping of entry heading -> "Total SGD Eq." value. The total uses
+    the SAME formula as the per-category summary table (net the signed amounts
+    per currency, convert each net, then take the absolute value) so the two
+    always agree; callers assert this equality via ``_assert_sgd_total``.
     """
+    totals: dict[str, float] = {}
     for entry in entries:
         heading = entry.get(key, "")
         txns = entry.get("transactions", [])
@@ -75,14 +83,15 @@ def _render_txn_detail_table(out: list[str], entries: list[dict[str, Any]], key:
         else:
             out.append("| Date | Institution | Account | Account Type | Description | CCY | OC |")
             out.append("|---|---|---|---|---|---:|---:|")
-        entry_sgd_total = 0.0
+        ccy_net: dict[str, float] = {}
         for t in txns:
             desc = t["description"].strip().replace("|", "\\|")
             ccy = t.get("currency", "")
-            oc = fmt(t["amount"])
+            amt = float(t["amount"])
+            oc = fmt(amt)
             if use_fx:
-                sgd = convert_to_sgd(t["amount"], ccy, fx_rates)
-                entry_sgd_total += sgd or 0.0
+                ccy_net[ccy] = ccy_net.get(ccy, 0.0) + amt
+                sgd = convert_to_sgd(amt, ccy, fx_rates)
                 out.append(
                     f"| {t['date']} | {t.get('bank', '')} | {t.get('account', '')} | "+
                     f"{t.get('account_type', '')} | {desc} | {ccy} | {oc} | {fmt(sgd)} |"
@@ -93,10 +102,27 @@ def _render_txn_detail_table(out: list[str], entries: list[dict[str, Any]], key:
                     f"{t.get('account_type', '')} | {desc} | {ccy} | {oc} |"
                 )
         if use_fx:
+            total = sum(
+                abs(convert_to_sgd(net, c, fx_rates) or 0.0)
+                for c, net in ccy_net.items()
+            )
+            totals[heading] = total
             out.append(
-                f"| | | | | **Total SGD Eq.** | | | **{fmt(entry_sgd_total)}** |"
+                f"| | | | | **Total SGD Eq.** | | | **{fmt(total)}** |"
             )
         out.append("\n")
+    return totals
+
+
+def _assert_sgd_total(section: str, label: str, summary_sgd: float,
+                      detail_total: float) -> None:
+    """Assert the summary table's SGD Eq. for one entry equals the drill-down
+    detail table's "Total SGD Eq." for the same entry."""
+    if not math.isclose(summary_sgd, detail_total, rel_tol=1e-9, abs_tol=0.005):
+        raise AssertionError(
+            f"{section}: SGD Eq. total mismatch for {label!r}: "
+            f"summary={summary_sgd:.2f} vs drill-down={detail_total:.2f}"
+        )
 
 
 def render_report(result: dict[str, Any], consolidated: bool = False,
@@ -396,6 +422,7 @@ def render_report(result: dict[str, Any], consolidated: bool = False,
         out.append(" | ".join(sep_parts) + " |")
 
         tot_sgd = 0.0
+        income_summary_sgd: dict[str, float] = {}
         for entry in income_drilldown:
             source = entry["source"]
             by_ccy = entry["by_currency"]
@@ -412,6 +439,7 @@ def render_report(result: dict[str, Any], consolidated: bool = False,
             if use_fx:
                 tot_sgd += row_sgd
                 income_cells.append(fmt(row_sgd))
+                income_summary_sgd[source] = row_sgd
             out.append(" | ".join(income_cells) + " |")
         if use_fx and tot_sgd:
             total_parts = ["| **Total Income**"]
@@ -423,7 +451,11 @@ def render_report(result: dict[str, Any], consolidated: bool = False,
             out.append(f"| **Total Income (per currency above)** | | |")
         out.append("")
 
-        _render_txn_detail_table(out, income_drilldown, "source", use_fx, fx_rates)
+        income_detail_totals = _render_txn_detail_table(
+            out, income_drilldown, "source", use_fx, fx_rates)
+        for src, sgd in income_summary_sgd.items():
+            _assert_sgd_total("Income Breakdown", src, sgd,
+                              income_detail_totals.get(src, 0.0))
 
     # ---- Expense Breakdown ---------------------------------------------------
     if expense_drilldown:
@@ -445,6 +477,7 @@ def render_report(result: dict[str, Any], consolidated: bool = False,
         out.append(" | ".join(sep_parts) + " |")
 
         totals_sgd = 0.0
+        expense_summary_sgd: dict[str, float] = {}
         for entry in expense_drilldown:
             cat = entry["category"]
             by_ccy = entry["by_currency"]
@@ -461,6 +494,7 @@ def render_report(result: dict[str, Any], consolidated: bool = False,
             if use_fx:
                 totals_sgd += row_sgd
                 expense_cells.append(fmt(row_sgd))
+                expense_summary_sgd[cat] = row_sgd
             out.append(" | ".join(expense_cells) + " |")
         if use_fx and totals_sgd:
             total_parts = ["| **Total Expense**"]
@@ -472,7 +506,11 @@ def render_report(result: dict[str, Any], consolidated: bool = False,
             out.append(f"| **Total Expense (per currency above)** | | |")
         out.append("")
 
-        _render_txn_detail_table(out, expense_drilldown, "category", use_fx, fx_rates)
+        expense_detail_totals = _render_txn_detail_table(
+            out, expense_drilldown, "category", use_fx, fx_rates)
+        for cat, sgd in expense_summary_sgd.items():
+            _assert_sgd_total("Expense Breakdown", cat, sgd,
+                              expense_detail_totals.get(cat, 0.0))
 
     # ---- Transfer Breakdown --------------------------------------------------
     if transfer_drilldown:
@@ -494,6 +532,7 @@ def render_report(result: dict[str, Any], consolidated: bool = False,
         out.append(" | ".join(sep_parts) + " |")
 
         totals_sgd = 0.0
+        transfer_summary_sgd: dict[str, float] = {}
         for entry in transfer_drilldown:
             cat = entry["category"]
             by_ccy = entry["by_currency"]
@@ -510,6 +549,7 @@ def render_report(result: dict[str, Any], consolidated: bool = False,
             if use_fx:
                 totals_sgd += row_sgd
                 cells.append(fmt(row_sgd))
+                transfer_summary_sgd[cat] = row_sgd
             out.append(" | ".join(cells) + " |")
         if use_fx and totals_sgd:
             total_parts = ["| **Total Transfers**"]
@@ -521,7 +561,11 @@ def render_report(result: dict[str, Any], consolidated: bool = False,
             out.append(f"| **Total Transfers (per currency above)** | | |")
         out.append("")
 
-        _render_txn_detail_table(out, transfer_drilldown, "category", use_fx, fx_rates)
+        transfer_detail_totals = _render_txn_detail_table(
+            out, transfer_drilldown, "category", use_fx, fx_rates)
+        for cat, sgd in transfer_summary_sgd.items():
+            _assert_sgd_total("Transfer Breakdown", cat, sgd,
+                              transfer_detail_totals.get(cat, 0.0))
 
     # ---- 4. Key Observations -------------------------------------------------
     out.append("## 4. Key Observations\n")
