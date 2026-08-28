@@ -37,9 +37,13 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-# Internal-transfer reconciliation lives in the standalone pfa-ir-verifier
-# package so it can be run independently (e.g. CI) without the analysis stack.
-from pfa_ir_verifier import reconcile_internal_transfers as _reconcile_internal_transfers
+# Internal-transfer reconciliation (and self-reference promotion) lives in the
+# standalone pfa-ir-verifier package so it can be run independently (e.g. CI)
+# without the analysis stack.
+from pfa_ir_verifier import (
+    promote_internal_transfers as _promote_internal_transfers,
+    reconcile_internal_transfers as _reconcile_internal_transfers,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -162,92 +166,6 @@ def _own_account_digits(accounts: list[dict[str, Any]]) -> set[str]:
         if len(no) >= 4:
             digits.add(no)
     return digits
-
-
-def _self_reference_accounts(description: str, own_digits: set[str]) -> set[str]:
-    """Return the set of the user's own account numbers (digit-only) that appear
-    as a *whole* digit run in ``description``.
-
-    A description referencing one of the user's own account numbers is a candidate
-    inter-account transfer (even when the consolidation module did not flag it
-    ``is_internal_transfer``). Matching is deliberately strict: an account number
-    must appear as a contiguous digit run, not as a substring buried inside a
-    longer transaction-reference number — a naive substring check would, e.g.,
-    match a 10-digit account number inside a 20-digit payment reference.
-
-    Returns the *set* of matched account numbers (may be empty) rather than a bare
-    bool, so callers can validate the match against a partner leg (see
-    ``_promote_internal_transfers``).
-    """
-    if not description or not own_digits:
-        return set()
-    digit_runs = set(re.findall(r"\d+", description))
-    return {no for no in own_digits if no in digit_runs}
-
-
-def _promote_internal_transfers(
-    rows: list[dict[str, Any]],
-    own_digits: set[str],
-    amount_key: str = "amount",
-    desc_key: str = "description",
-    flag_key: str = "is_internal_transfer",
-    tol: float = 0.01,
-) -> None:
-    """Finalize ``is_internal_transfer`` for rows that were *candidate* internal
-    transfers (description references an own account number) but not explicitly
-    flagged by the consolidator.
-
-    Root-cause fix (Strategy A): an internal transfer is a *relationship* between
-    two legs, not a property of a single description. A lone ``Misc Debit … 8995976591``
-    whose reference number merely coincides with an own account number must NOT be
-    promoted to a transfer unless an opposite-sign, equal-magnitude partner leg
-    referencing the same account number exists elsewhere in the same IR. Requiring
-    the partner prevents the false-positive self-reference gap (e.g. a phantom
-    −100.00 transfer with no +100.00 inbound).
-
-    Mutates ``rows`` in place: rows already ``flag_key=True`` are left untouched
-    (the consolidator is authoritative); candidate rows are promoted only when a
-    valid partner is found.
-    """
-    # Index candidate-self-reference rows by the matched account number.
-    by_acct: dict[str, list[int]] = {}
-    ref_accounts: list[set[str]] = []
-    for i, r in enumerate(rows):
-        if r.get(flag_key):
-            ref_accounts.append(set())  # already internal; not a candidate
-            continue
-        matched = _self_reference_accounts(str(r.get(desc_key, "")), own_digits)
-        ref_accounts.append(matched)
-        for acct_no in matched:
-            by_acct.setdefault(acct_no, []).append(i)
-
-    if not by_acct:
-        return
-
-    for i, r in enumerate(rows):
-        matched = ref_accounts[i]
-        if not matched or r.get(flag_key):
-            continue
-        amt = float(r.get(amount_key, 0.0))
-        promoted = False
-        for acct_no in matched:
-            for j in by_acct.get(acct_no, []):
-                if j == i:
-                    continue
-                partner = rows[j]
-                # The partner need not already be flagged: a genuine internal
-                # transfer is a pair of legs that both reference the same own
-                # account with opposite sign and equal magnitude. Either leg may
-                # be the candidate here.
-                if not partner.get(flag_key) and acct_no not in ref_accounts[j]:
-                    continue
-                p_amt = float(partner.get(amount_key, 0.0))
-                if amt * p_amt < 0 and abs(abs(amt) - abs(p_amt)) <= tol:
-                    promoted = True
-                    break
-            if promoted:
-                break
-        r[flag_key] = promoted
 
 
 def _load_consolidated_ir(data: dict[str, Any], path: Path,

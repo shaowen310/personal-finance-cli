@@ -9,6 +9,7 @@ description = "Bank statement PDF parser for personal finance analysis (SG banks
 requires-python = ">=3.12"
 dependencies = [
     "pfa-ir-schema>=0.1.0",
+    "pfa-ir-verifier>=0.1.0",
     "pdfplumber>=0.11",
     "pandas>=2.0",
 ]

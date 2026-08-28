@@ -22,6 +22,9 @@ from pfa_ir_schema.relations import (
     REL_FD_INTEREST,
     REL_FD_PRINCIPAL,
 )
+# Transaction link-integrity verification now lives in pfa-ir-verifier (the
+# canonical home for all IR verification); re-use it here rather than duplicating.
+from pfa_ir_verifier import verify_txn_links
 
 
 def fill_fd_running_balances(statement: ParsedStatement) -> ParsedStatement:
@@ -625,66 +628,6 @@ def verify_statement_meta(statement: ParsedStatement) -> ParsedStatement:
         )
         if warn not in statement.warnings:
             statement.warnings.append(warn)
-    return statement
-
-
-def verify_txn_links(statement: ParsedStatement) -> ParsedStatement:
-    """Verify transaction link integrity.
-
-    Two independent checks apply:
-
-    * **Orphan detection** — a transaction flagged ``is_internal_transfer`` with
-      an empty ``linked_txn_ids`` list means the linker failed to find the other
-      side, which would let the move be double-counted downstream.
-
-    * **Symmetry verification** — ANY transaction (regardless of
-      ``is_internal_transfer``) that carries entries in ``linked_txn_ids`` must
-      be reciprocal: if A marks B as related, B must also mark A. A one-sided
-      link indicates the linker only updated one side (e.g. a missed twin).
-
-    Runs on every pipeline path (fresh extraction and IR reload) so a saved
-    ``.ir.json`` whose links were lost is still flagged. Idempotent: an
-    already-present warning is not re-appended.
-
-    Mutates and returns *statement*.
-    """
-    # Index every transaction by id so we can resolve linked_txn_ids.
-    txn_by_id: dict[str, Transaction] = {}
-    for acct in statement.accounts:
-        for txn in (acct.transactions or []):
-            if txn.txn_id:
-                txn_by_id[txn.txn_id] = txn
-
-    # Single pass: two independent checks on the same iteration.
-    for acct in statement.accounts:
-        for txn in (acct.transactions or []):
-            # Orphan detection — internal transfers must have linked twins.
-            # NOT covered by symmetry below because orphans have no links to
-            # iterate over.
-            if txn.is_internal_transfer and not txn.linked_txn_ids:
-                warn = (
-                    f"transfer without linked twin: txn {txn.txn_id!r} "
-                    f"(account {acct.account_no}, {txn.posted_date}, amount "
-                    f"{txn.amount}) is_internal_transfer=true but linked_txn_ids is empty"
-                )
-                if warn not in statement.warnings:
-                    statement.warnings.append(warn)
-
-            # Symmetry verification — ANY transaction (regardless of
-            # is_internal_transfer) with linked_txn_ids must be reciprocal.
-            for twin_id in txn.linked_txn_ids:
-                twin = txn_by_id.get(twin_id)
-                if twin is None:
-                    continue
-                if txn.txn_id in twin.linked_txn_ids:
-                    continue
-                warn = (
-                    f"transfer link not reciprocal: txn {txn.txn_id!r} "
-                    f"(account {acct.account_no}) lists {twin_id!r} as related "
-                    f"but {twin_id!r} does not list it back"
-                )
-                if warn not in statement.warnings:
-                    statement.warnings.append(warn)
     return statement
 
 
