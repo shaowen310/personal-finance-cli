@@ -37,6 +37,10 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
+# Internal-transfer reconciliation lives in the standalone pfa-ir-verifier
+# package so it can be run independently (e.g. CI) without the analysis stack.
+from pfa_ir_verifier import reconcile_internal_transfers as _reconcile_internal_transfers
+
 
 # ---------------------------------------------------------------------------
 # Internal transaction model
@@ -659,6 +663,7 @@ def _analyze_consolidated(raw: dict[str, Any], meta: dict[str, Any],
     ``start_date``/``end_date``), account-summary balances are ignored and
     opening/closing are derived from the filtered transaction stream instead.
     """
+    _reconcile_internal_transfers(txns)
     by_ccy: dict[str, list[Txn]] = defaultdict(list)
     for t in txns:
         by_ccy[t["currency"]].append(t)
@@ -728,6 +733,7 @@ def analyze_statement(raw: dict[str, Any], meta: dict[str, Any],
     ``start_date``/``end_date``), statement-meta balances are ignored and
     opening/closing are derived from the filtered transaction stream instead.
     """
+    _reconcile_internal_transfers(txns)
     by_ccy: dict[str, list[Txn]] = defaultdict(list)
     for t in txns:
         by_ccy[t["currency"]].append(t)

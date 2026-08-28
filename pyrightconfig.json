@@ -40,6 +40,7 @@
         "packages/pfa-fx/src",
         "packages/pfa-parser/src",
         "packages/pfa-ir-consolidator/src",
+        "packages/pfa-ir-verifier/src",
         "packages/pfa-analysis/src",
         "apps/pfa-cli/src"
       ]
