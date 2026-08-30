@@ -22,6 +22,7 @@ from pfa_analysis.analyze import (
     _internal_transfer_ids,
     _split_default,
     build_assets,
+    build_fx_drilldown,
     build_income_expense_drilldowns,
     build_transfer_drilldown,
     parse_date_to_iso,
@@ -128,6 +129,13 @@ def render_consolidated_report(
     transfer_drill = build_transfer_drilldown(
         consolidated_path, cat_path, start_date, end_date,
     )
+    # Realized FX gain/loss from currency-conversion pairs (base currency SGD).
+    fx_gain_loss = build_fx_drilldown(
+        consolidated_path,
+        as_of=(fx_rates.get("date") if fx_rates else None),
+        fx_rates=(fx_rates.get("rates") if fx_rates else None),
+        start_date=start_date, end_date=end_date,
+    )
 
     # Build categorization summary from drilldown data.
     cat_summary: list[dict[str, Any]] = []
@@ -156,6 +164,7 @@ def render_consolidated_report(
         income_drilldown=income_drill if income_drill else None,
         expense_drilldown=expense_drill if expense_drill else None,
         transfer_drilldown=transfer_drill if transfer_drill else None,
+        fx_gain_loss=fx_gain_loss,
         cat_summary=cat_summary if cat_summary else None,
         cat_coverage=cat_coverage,
     )

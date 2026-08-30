@@ -131,6 +131,7 @@ def render_report(result: dict[str, Any], consolidated: bool = False,
                   income_drilldown: list[dict[str, Any]] | None = None,
                   expense_drilldown: list[dict[str, Any]] | None = None,
                   transfer_drilldown: list[dict[str, Any]] | None = None,
+                  fx_gain_loss: dict[str, Any] | None = None,
                   cat_summary: list[dict[str, Any]] | None = None,
                   cat_coverage: float | None = None) -> str:
     """Render a balance-sheet + cash-flow Markdown report.
@@ -361,14 +362,22 @@ def render_report(result: dict[str, Any], consolidated: bool = False,
         # cash flow); external transfers = flows to/from third parties. Outflows
         # (expense, transfer out) are shown with their natural negative sign.
         # (label, {ccy: signed_value}, bold?)
+        # Rows mirror the breakdowns: operating income/expense now encompass
+        # external transfers (Transfer In/Out (External)); currency conversions are
+        # their own lines (matching the "Currency Conversions" section); internal
+        # transfers are excluded from net cash flow (see §Internal Transfers).
         cf_rows: list[tuple[str, dict[str, float], bool]] = [
-            ("Income", _col("income"), False),
-            ("Transfer In (External)", _col("transfer_in_external"), False),
-            ("Transfer In (Internal)", _col("transfer_in_internal"), False),
-            ("Expense", {c: -mbc[c]["expense"] for c in cf_ccies}, False),
-            ("Transfer Out (External)", {c: -mbc[c]["transfer_out_external"] for c in cf_ccies}, False),
-            ("Transfer Out (Internal)", {c: -mbc[c]["transfer_out_internal"] for c in cf_ccies}, False),
-            ("Net Operating", _col("net_operating"), True),
+            ("Income", {c: mbc[c]["income"] + mbc[c]["transfer_in_external"]
+                        for c in cf_ccies}, False),
+            ("Expense", {c: -(mbc[c]["expense"] + mbc[c]["transfer_out_external"])
+                         for c in cf_ccies}, False),
+            ("Currency Conversion (Given)", {c: -mbc[c]["fx_conversion_out"]
+                                             for c in cf_ccies}, False),
+            ("Currency Conversion (Received)", _col("fx_conversion_in"), False),
+            ("Net Operating Cash Flow",
+             {c: (mbc[c]["income"] + mbc[c]["transfer_in_external"]
+                  - mbc[c]["expense"] - mbc[c]["transfer_out_external"])
+              for c in cf_ccies}, True),
             ("Net Change in Cash", _col("net_change_cash"), True),
         ]
 
@@ -397,6 +406,12 @@ def render_report(result: dict[str, Any], consolidated: bool = False,
             if use_fx:
                 cf_vals.append(fmt(row_sgd))
             out.append(" | ".join(cf_vals) + " |")
+        out.append(
+            "_Internal transfers between your own accounts net to zero and are "
+            "excluded from net cash flow; see §Internal Transfers. Currency "
+            "conversions are shown at face value per currency — their SGD-equivalent "
+            "difference is the realized FX gain/loss in §Currency Conversions._\n"
+        )
         out.append("")
     else:
         out.append("_Not applicable \u2014 statement has no transactions._\n")
@@ -512,60 +527,106 @@ def render_report(result: dict[str, Any], consolidated: bool = False,
             _assert_sgd_total("Expense Breakdown", cat, sgd,
                               expense_detail_totals.get(cat, 0.0))
 
-    # ---- Transfer Breakdown --------------------------------------------------
+    # ---- Internal Transfers (own-account moves) -----------------------------
     if transfer_drilldown:
-        out.append("## Transfer Breakdown\n")
-        transfer_ccies: list[str] = sorted(set(
+        out.append("## Internal Transfers\n")
+        out.append(
+            "_Own-account moves between the holder's accounts. The summary shows the "
+            "gross volume moved per currency; each pair nets to ~0 and is excluded "
+            "from income/expense and net cash flow. Individual transactions follow "
+            "below (same layout as the income/expense breakdowns)._\n"
+        )
+        int_ccies: list[str] = sorted(set(
             c for entry in transfer_drilldown for c in entry["by_currency"]
         ))
         header_parts = ["| Category"]
-        for c in transfer_ccies:
+        for c in int_ccies:
             header_parts.append(c)
         if use_fx:
             header_parts.append("SGD Eq.")
         out.append(" | ".join(header_parts) + " |")
         sep_parts = ["|---"]
-        for _ in transfer_ccies:
+        for _ in int_ccies:
             sep_parts.append("---:")
         if use_fx:
             sep_parts.append("---:")
         out.append(" | ".join(sep_parts) + " |")
 
         totals_sgd = 0.0
-        transfer_summary_sgd: dict[str, float] = {}
         for entry in transfer_drilldown:
             cat = entry["category"]
-            by_ccy = entry["by_currency"]
-            cells: list[str] = [cat]
+            # A debit and its matching credit net to ~0, so the *net* per currency
+            # is uninformative; report the gross volume moved instead.
+            gross: dict[str, float] = defaultdict(float)
+            for t in entry.get("transactions", []):
+                gross[t["currency"]] += abs(float(t["amount"]))
+            int_cells: list[str] = [cat]
             row_sgd = 0.0
-            for c in transfer_ccies:
-                amt = by_ccy.get(c, 0.0)
-                cells.append(fmt(amt))
+            for c in int_ccies:
+                amt = gross.get(c, 0.0)
+                int_cells.append(fmt(amt))
                 if use_fx:
                     conv = convert_to_sgd(amt, c, fx_rates) or 0.0
-                    row_sgd += abs(conv)
+                    row_sgd += conv
                 else:
-                    totals_sgd += abs(amt)
+                    totals_sgd += amt
             if use_fx:
                 totals_sgd += row_sgd
-                cells.append(fmt(row_sgd))
-                transfer_summary_sgd[cat] = row_sgd
-            out.append(" | ".join(cells) + " |")
-        if use_fx and totals_sgd:
-            total_parts = ["| **Total Transfers**"]
-            for _ in transfer_ccies:
+                int_cells.append(fmt(row_sgd))
+            out.append(" | ".join(int_cells) + " |")
+        if totals_sgd:
+            total_parts = ["| **Total Internal Transfers**"]
+            for _ in int_ccies:
                 total_parts.append("")
             total_parts.append(f"**{fmt(totals_sgd)}**")
             out.append(" | ".join(total_parts) + " |")
-        elif not use_fx:
-            out.append(f"| **Total Transfers (per currency above)** | | |")
         out.append("")
 
-        transfer_detail_totals = _render_txn_detail_table(
-            out, transfer_drilldown, "category", use_fx, fx_rates)
-        for cat, sgd in transfer_summary_sgd.items():
-            _assert_sgd_total("Transfer Breakdown", cat, sgd,
-                              transfer_detail_totals.get(cat, 0.0))
+        _render_txn_detail_table(out, transfer_drilldown, "category", use_fx, fx_rates)
+
+    # ---- Realized FX Gain/Loss ----------------------------------------------
+    if fx_gain_loss:
+        pairs = fx_gain_loss.get("pairs") or []
+        base_ccy = fx_gain_loss.get("base_currency", "SGD")
+        total = fx_gain_loss.get("total_sgd", 0.0)
+        out.append("## Currency Conversions & Realized FX Gain/Loss\n")
+        if not pairs:
+            out.append("- No currency-conversion transactions detected in this period.\n")
+        else:
+            out.append(
+                f"_Realized on currency-conversion pairs only; valued as of "
+                f"**{fx_gain_loss.get('as_of') or 'n/a'}** using rates from "
+                f"**{fx_gain_loss.get('source') or 'n/a'}** (base = {base_ccy})._\n"
+            )
+            out.append(
+                "| Date | Given | Received | Implied Rate | "
+                f"FX Gain/Loss ({base_ccy}) |"
+            )
+            out.append("|---|---|---|---|---:|")
+            for p in pairs:
+                g = p["given"]
+                r = p["received"]
+                gl = p["fx_gl_sgd"]
+                sign = "+" if gl >= 0 else "-"
+                out.append(
+                    f"| {p.get('date', '')} "
+                    f"| {fmt(g['amount'])} {g['currency']} "
+                    f"| {fmt(r['amount'])} {r['currency']} "
+                    f"| {p.get('implied_rate', 0):.4f} "
+                    f"| {sign}{fmt(abs(gl))} |"
+                )
+            out.append(
+                f"| | | | **Total** | "
+                f"{'+' if total >= 0 else '-'}{fmt(abs(total))} |"
+            )
+            out.append("")
+            by_recv = fx_gain_loss.get("by_received_currency") or {}
+            if by_recv:
+                detail = ", ".join(
+                    f"{c}: {'+' if v >= 0 else '-'}{fmt(abs(v))}"
+                    for c, v in by_recv.items()
+                )
+                out.append(f"_By received currency — {detail}_\n")
 
     # ---- 4. Key Observations -------------------------------------------------
     out.append("## 4. Key Observations\n")

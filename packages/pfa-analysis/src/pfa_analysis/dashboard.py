@@ -18,6 +18,7 @@ from pfa_analysis.analyze import (
     _analyze_file,
     _classify_discretionary,
     _load_ir_with_txn_id,
+    compute_fx_gain_loss,
     _NON_CASH_ACCOUNT_TYPES,
     _split_cat,
     classify_cash_flow,
@@ -506,6 +507,35 @@ def build_dashboard_json(
         "expense_total_sgd": trend_expense,
     }
 
+    # ---- Realized FX Gain/Loss (per IR, aggregated) --------------------------
+    fx_total_sgd = 0.0
+    fx_pairs: list[dict[str, Any]] = []
+    fx_by_recv: dict[str, float] = defaultdict(float)
+    fx_as_of = ""
+    fx_source = ""
+    fx_rates_arg = fx_data if fx_rates else None
+    for p in ir_paths:
+        fxd = compute_fx_gain_loss(
+            p, as_of=(max(valid_dates) if valid_dates else None),
+            fx_rates=fx_rates_arg,
+        )
+        fx_total_sgd += fxd.get("total_sgd", 0.0)
+        fx_pairs.extend(fxd.get("pairs", []))
+        for c, v in (fxd.get("by_received_currency") or {}).items():
+            fx_by_recv[c] += v
+        if not fx_as_of and fxd.get("as_of"):
+            fx_as_of = fxd["as_of"]
+        if not fx_source and fxd.get("source"):
+            fx_source = fxd["source"]
+    fx_gain_loss = {
+        "base_currency": "SGD",
+        "total_sgd": round(fx_total_sgd, 2),
+        "as_of": fx_as_of,
+        "source": fx_source,
+        "by_received_currency": {c: round(v, 2) for c, v in sorted(fx_by_recv.items())},
+        "pairs": fx_pairs,
+    }
+
     # ---- Assemble ------------------------------------------------------------
     return {
         "period": latest_period,
@@ -513,6 +543,7 @@ def build_dashboard_json(
         "fx_rates": fx_data,
         "asset_composition": asset_composition,
         "cash_flow": {"summary": cash_flow_summary},
+        "fx_gain_loss": fx_gain_loss,
         "income_analysis": income_analysis,
         "spending_analysis": spending_analysis,
         "account_value_change": account_value_change,

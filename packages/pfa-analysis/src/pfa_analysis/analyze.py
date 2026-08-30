@@ -42,6 +42,13 @@ from typing import Any
 # without the analysis stack.
 from pfa_ir_verifier import demote_orphan_internal_transfers, promote_internal_transfers
 
+# Relationship labels describing how transactions link to each other.
+from pfa_ir_schema.relations import REL_CURRENCY_CONVERSION
+
+# FX rate retrieval (cached, base = SGD). Falls back to pfa_fx defaults.
+from pfa_analysis.fx_cache import fetch_fx_rates as _fetch_fx_rates
+from pfa_fx import DEFAULT_FX_RATES
+
 
 # ---------------------------------------------------------------------------
 # Internal transaction model
@@ -381,6 +388,7 @@ def compute_metrics(txns: list[Txn], meta: dict[str, Any], ccy: str,
     income = expense = transfer_in = transfer_out = 0.0
     transfer_in_int = transfer_in_ext = 0.0
     transfer_out_int = transfer_out_ext = 0.0
+    fx_conv_in = fx_conv_out = 0.0
     for t in txns:
         cat = (txn_categories or {}).get(t.get("txn_id", "")) if txn_categories is not None else None
         c = classify_cash_flow(t, cat)
@@ -391,6 +399,16 @@ def compute_metrics(txns: list[Txn], meta: dict[str, Any], ccy: str,
              if c in ("Expense", "Transfer Out")
              else _income_contrib(t["amount"], t.get("account_type", "")))
         is_int = bool(t.get("is_internal_transfer", False))
+        if REL_CURRENCY_CONVERSION in (t.get("link_labels") or []):
+            # Currency conversions are neither income/expense nor transfers — they
+            # live in the dedicated "Currency Conversions" section. They stay in
+            # total inflow/outflow so per-currency cash still reconciles, but are
+            # kept out of the operating (income/expense) and transfer buckets.
+            if _is_debit(t):
+                fx_conv_out += a
+            else:
+                fx_conv_in += a
+            continue
         if c == "Income":
             income += a
         elif c == "Transfer In":
@@ -408,8 +426,8 @@ def compute_metrics(txns: list[Txn], meta: dict[str, Any], ccy: str,
             else:
                 transfer_out_ext += a
 
-    total_inflow = income + transfer_in
-    total_outflow = expense + transfer_out
+    total_inflow = income + transfer_in + fx_conv_in
+    total_outflow = expense + transfer_out + fx_conv_out
     net_change_cash = total_inflow - total_outflow
     net_operating = income - expense
     savings_rate = net_operating / income if income > 0 else 0.0
@@ -442,6 +460,8 @@ def compute_metrics(txns: list[Txn], meta: dict[str, Any], ccy: str,
         "transfer_in_external": transfer_in_ext,
         "transfer_out_internal": transfer_out_int,
         "transfer_out_external": transfer_out_ext,
+        "fx_conversion_in": fx_conv_in,
+        "fx_conversion_out": fx_conv_out,
         "total_inflow": total_inflow,
         "total_outflow": total_outflow, "net_change_cash": net_change_cash,
         "net_operating": net_operating, "savings_rate": savings_rate,
@@ -848,6 +868,11 @@ def build_income_expense_drilldowns(
     for row in ir_rows:
         if row.get("is_internal_transfer"):
             continue
+        # Currency conversions are not third-party transfers; they are surfaced in
+        # the dedicated "Currency Conversions" section, so exclude them from the
+        # income/expense breakdowns (including Transfer In/Out (External)).
+        if REL_CURRENCY_CONVERSION in (row.get("link_labels") or []):
+            continue
 
         txn_id = row.get("txn_id", "")
         cat_full = categories.get(txn_id, "")
@@ -990,7 +1015,10 @@ def build_transfer_drilldown(
     """
     transfer_drill: list[dict[str, Any]] = []
     try:
-        _, ir_rows = _load_ir_with_txn_id(consolidated_path, start_date, end_date)
+        # Internal (own-account) transfers are the only thing this breakdown now
+        # surfaces, so keep them in the loaded rows.
+        _, ir_rows = _load_ir_with_txn_id(consolidated_path, start_date, end_date,
+                                          keep_internal=True)
     except Exception:
         return transfer_drill
 
@@ -1009,14 +1037,14 @@ def build_transfer_drilldown(
         cat_full = categories.get(txn_id, "")
         cat_cls, cat_sub = _split_cat(cat_full) if cat_full else ("", "")
 
-        # Determine transfer category.
-        if cat_cls == "Transfer":
-            cat_disp = cat_sub or cat_full or "Transfer"
-        elif row.get("is_internal_transfer"):
-            cat_disp = "Internal Transfer"
-        else:
-            # Skip non-transfer transactions.
+        # Only own-account (internal) transfers are shown here. External transfers
+        # now live in the income/expense breakdowns; currency conversions have their
+        # own dedicated section.
+        if REL_CURRENCY_CONVERSION in (row.get("link_labels") or []):
             continue
+        if not row.get("is_internal_transfer"):
+            continue
+        cat_disp = "Internal Transfer"
 
         tr_ccy[cat_disp][row["currency"]] += float(row["amount"])
         tr_txns[cat_disp].append({
@@ -1037,6 +1065,157 @@ def build_transfer_drilldown(
         })
 
     return transfer_drill
+
+
+def _empty_fx_result(base_ccy: str) -> dict[str, Any]:
+    """Empty realized-FX result (no conversions or load failure)."""
+    return {
+        "base_currency": base_ccy,
+        "total_sgd": 0.0,
+        "as_of": "",
+        "source": "",
+        "by_received_currency": {},
+        "pairs": [],
+    }
+
+
+def _resolve_fx_rates(as_of: str | None, fx_rates: dict[str, float] | None
+                      ) -> tuple[dict[str, float], str, str]:
+    """Resolve FX rates (SGD per 1 unit) and provenance.
+
+    Priority: caller-supplied *fx_rates* → cached fetch as of *as_of* →
+    ``pfa_fx.DEFAULT_FX_RATES`` hardcoded fallback. Returns
+    ``(rates, as_of_used, source)``.
+    """
+    if fx_rates:
+        return dict(fx_rates), as_of or "", "caller-provided"
+    date = as_of or ""
+    fx = _fetch_fx_rates(date) if date else None
+    if fx and fx.get("rates"):
+        return (
+            {k: float(v) for k, v in fx["rates"].items()},
+            fx.get("date", date),
+            fx.get("source", "pfa_fx"),
+        )
+    return dict(DEFAULT_FX_RATES), date, "pfa_fx default"
+
+
+def compute_fx_gain_loss(
+    consolidated_path: Path,
+    as_of: str | None = None,
+    fx_rates: dict[str, float] | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> dict[str, Any]:
+    """Compute realized FX gain/loss from currency-conversion transaction pairs.
+
+    Walks every transaction whose ``link_labels`` contains
+    ``REL_CURRENCY_CONVERSION``. For each pair — a *given* leg (negative amount)
+    and a *received* leg (positive amount) in a *different* currency — the
+    realized FX gain/loss is the SGD value the received leg is worth at the
+    reference rate minus the SGD value of what was given:
+
+        fx_gl_sgd = |amount_received| * rate[recv_ccy]
+                    - |amount_given]   * rate[given_ccy]
+
+    where ``rate[ccy]`` is SGD per 1 unit of *ccy* (SGD = 1.0). A positive value
+    is a gain (the conversion realised a better rate than the reference); a
+    negative value is a loss.
+
+    Only **realized** gain/loss is computed (no foreign-balance revaluation).
+    Returns a dict with ``total_sgd``, ``pairs`` (per-pair detail) and
+    ``by_received_currency`` (gain/loss grouped by the currency received).
+    """
+    base_ccy = "SGD"
+    try:
+        meta, rows = _load_ir_with_txn_id(consolidated_path, start_date, end_date)
+    except Exception:
+        return _empty_fx_result(base_ccy)
+
+    if as_of is None:
+        as_of = meta.get("period_to") or meta.get("period_from") or ""
+
+    rates, rate_as_of, source = _resolve_fx_rates(as_of, fx_rates)
+
+    # Index rows by txn_id so we can resolve each conversion's partner leg.
+    by_id = {r["txn_id"]: r for r in rows}
+
+    total = 0.0
+    by_recv: dict[str, float] = defaultdict(float)
+    pairs: list[dict[str, Any]] = []
+
+    for r in rows:
+        if REL_CURRENCY_CONVERSION not in (r.get("link_labels") or []):
+            continue
+        # Process each pair exactly once, from the given (outflow) leg.
+        if r["amount"] >= 0:
+            continue
+        given_ccy = r["currency"]
+        given_amt = abs(r["amount"])
+
+        recv = None
+        for pid in r.get("linked_txn_ids", []) or []:
+            p = by_id.get(pid)
+            if not p:
+                continue
+            if p["currency"] != given_ccy and p["amount"] > 0:
+                recv = p
+                break
+        if recv is None:
+            # Partner leg missing or not a genuine cross-currency pair; skip.
+            continue
+
+        recv_ccy = recv["currency"]
+        recv_amt = recv["amount"]
+        rg = rates.get(given_ccy)
+        rr = rates.get(recv_ccy)
+        if rg is None or rr is None:
+            # Reference rate unavailable for one of the currencies; skip.
+            continue
+
+        given_base = given_amt * rg
+        recv_base = recv_amt * rr
+        gl = recv_base - given_base
+        implied = (recv_amt / given_amt) if given_amt else 0.0
+
+        total += gl
+        by_recv[recv_ccy] += gl
+        pairs.append({
+            "date": r.get("date", ""),
+            "given": {"currency": given_ccy, "amount": -given_amt},
+            "received": {"currency": recv_ccy, "amount": recv_amt},
+            "implied_rate": round(implied, 6),
+            "fx_gl_sgd": round(gl, 2),
+            "txn_ids": [r["txn_id"], recv["txn_id"]],
+        })
+
+    return {
+        "base_currency": base_ccy,
+        "total_sgd": round(total, 2),
+        "as_of": rate_as_of,
+        "source": source,
+        "by_received_currency": {c: round(v, 2) for c, v in sorted(by_recv.items())},
+        "pairs": pairs,
+    }
+
+
+def build_fx_drilldown(
+    consolidated_path: Path,
+    as_of: str | None = None,
+    fx_rates: dict[str, float] | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> dict[str, Any]:
+    """Build the realized FX gain/loss drilldown for the consolidated report.
+
+    Thin wrapper over :func:`compute_fx_gain_loss` so report/dashboard callers
+    use the same naming convention as :func:`build_transfer_drilldown`. Returns
+    the per-pair realized FX gain/loss detail (base currency SGD).
+    """
+    return compute_fx_gain_loss(
+        consolidated_path, as_of=as_of, fx_rates=fx_rates,
+        start_date=start_date, end_date=end_date,
+    )
 
 
 def _split_default(txns: list[Txn], meta: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -1211,6 +1390,8 @@ def _load_ir_with_txn_id(path: Path,
                     "bank": inst,
                     "account": acct_no,
                     "is_internal_transfer": is_internal,
+                    "link_labels": list(txn.get("link_labels", []) or []),
+                    "linked_txn_ids": list(txn.get("linked_txn_ids", []) or []),
                 })
         # Promote candidate self-reference rows only when a valid partner leg exists.
         promote_internal_transfers(rows, own_digits, amount_key="amount",
@@ -1232,5 +1413,7 @@ def _load_ir_with_txn_id(path: Path,
             "bank": meta["bank"],
             "account": meta["account_no"],
             "is_internal_transfer": bool(txn.get("is_internal_transfer", False)),
+            "link_labels": list(txn.get("link_labels", []) or []),
+            "linked_txn_ids": list(txn.get("linked_txn_ids", []) or []),
         })
     return meta, rows
