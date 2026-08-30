@@ -48,6 +48,22 @@ def fmt(v: float | None) -> str:
     return f"{v:,.2f}" if isinstance(v, (int, float)) else "\u2014"
 
 
+def _it_display_amount(txn: dict[str, Any]) -> float:
+    """Cash-flow sign for an internal-transfer transaction in this report.
+
+    Money OUT of an account is shown negative, money INTO an account positive.
+    Liability accounts (``credit_card``) store a payment as a negative amount
+    (it reduces the liability owed), which is the opposite of the physical flow
+    of funds, so flip their sign to reflect the real direction. Other account
+    types already carry cash-flow sign (debit negative, credit positive). The
+    IR itself is never mutated — this is display-only.
+    """
+    amt = float(txn.get("amount", 0.0))
+    if str(txn.get("account_type", "")) == "credit_card":
+        return -amt
+    return amt
+
+
 def _render_txn_detail_table(out: list[str], entries: list[dict[str, Any]], key: str,
                              use_fx: bool,
                              fx_rates: dict[str, Any] | None) -> dict[str, float]:
@@ -533,9 +549,10 @@ def render_report(result: dict[str, Any], consolidated: bool = False,
         out.append("## Internal Transfers\n")
         out.append(
             "_Own-account moves between the holder's accounts. The summary shows the "
-            "gross volume moved per currency; each pair nets to ~0 and is excluded "
-            "from income/expense and the funds flow. Individual transactions follow "
-            "below (same layout as the income/expense breakdowns)._\n"
+            "signed value per currency, split into inflow and outflow legs (In positive, "
+            "Out negative); each balanced pair nets to ~0 and is excluded from income/"
+            "expense and the funds flow. Individual transactions follow below (same layout "
+            "as the income/expense breakdowns)._\n"
         )
         int_ccies: list[str] = sorted(set(
             c for entry in transfer_drilldown for c in entry["by_currency"]
@@ -553,14 +570,32 @@ def render_report(result: dict[str, Any], consolidated: bool = False,
             sep_parts.append("---:")
         out.append(" | ".join(sep_parts) + " |")
 
-        totals_sgd = 0.0
+        # Split each entry into inflow and outflow legs so the reader sees the
+        # direction of each own-account move. Signs follow cash flow (money OUT of
+        # an account = negative, INTO an account = positive); a balanced pair nets
+        # to ~0 in the funds flow. Credit-card legs flip to positive because the
+        # card is the account that receives the payment.
+        transfer_rows: list[dict[str, Any]] = []
         for entry in transfer_drilldown:
             cat = entry["category"]
-            # A debit and its matching credit net to ~0, so the *net* per currency
-            # is uninformative; report the gross volume moved instead.
-            gross: dict[str, float] = defaultdict(float)
-            for t in entry.get("transactions", []):
-                gross[t["currency"]] += abs(float(t["amount"]))
+            txns = entry.get("transactions", [])
+            for label, sign in ((f"{cat} In", 1), (f"{cat} Out", -1)):
+                leg = [t for t in txns if sign * _it_display_amount(t) > 0]
+                if not leg:
+                    continue
+                by_ccy: dict[str, float] = defaultdict(float)
+                for t in leg:
+                    by_ccy[t["currency"]] += _it_display_amount(t)
+                transfer_rows.append({
+                    "category": label,
+                    "by_currency": dict(by_ccy),
+                    "transactions": leg,
+                })
+
+        totals_sgd = 0.0
+        for entry in transfer_rows:
+            cat = entry["category"]
+            gross = entry["by_currency"]
             int_cells: list[str] = [cat]
             row_sgd = 0.0
             for c in int_ccies:
@@ -583,7 +618,24 @@ def render_report(result: dict[str, Any], consolidated: bool = False,
             out.append(" | ".join(total_parts) + " |")
         out.append("")
 
-        _render_txn_detail_table(out, transfer_drilldown, "category", use_fx, fx_rates)
+        # Combine all inflow/outflow legs into a single drill-down table titled
+        # "Transactions" (the summary above still shows them split by direction).
+        # Render each leg with its cash-flow display sign (credit-card payments flip
+        # to positive, since the card is the account that receives the money) via a
+        # shallow copy, leaving the source IR data untouched.
+        combined_txns: list[dict[str, Any]] = []
+        for entry in transfer_drilldown:
+            for t in entry.get("transactions", []):
+                d = dict(t)
+                d["amount"] = _it_display_amount(t)
+                combined_txns.append(d)
+        if combined_txns:
+            _render_txn_detail_table(
+                out,
+                [{"category": "Transactions", "by_currency": {},
+                  "transactions": combined_txns}],
+                "category", use_fx, fx_rates,
+            )
 
     # ---- Realized FX Gain/Loss ----------------------------------------------
     if fx_gain_loss:
