@@ -363,21 +363,22 @@ def render_report(result: dict[str, Any], consolidated: bool = False,
         # (expense, transfer out) are shown with their natural negative sign.
         # (label, {ccy: signed_value}, bold?)
         # Rows mirror the breakdowns: operating income/expense now encompass
-        # external transfers (Transfer In/Out (External)); currency conversions are
-        # their own lines (matching the "Currency Conversions" section); internal
-        # transfers are excluded from net cash flow (see §Internal Transfers).
+        # external transfers (Transfer In/Out (External)); internal transfers are
+        # excluded from net cash flow (see §Internal Transfers). Currency conversions
+        # are surfaced as a single "Currency Conversion" line below Net Operating
+        # Cash Flow (matching the "Currency Conversions" section).
         cf_rows: list[tuple[str, dict[str, float], bool]] = [
             ("Income", {c: mbc[c]["income"] + mbc[c]["transfer_in_external"]
                         for c in cf_ccies}, False),
             ("Expense", {c: -(mbc[c]["expense"] + mbc[c]["transfer_out_external"])
                          for c in cf_ccies}, False),
-            ("Currency Conversion (Given)", {c: -mbc[c]["fx_conversion_out"]
-                                             for c in cf_ccies}, False),
-            ("Currency Conversion (Received)", _col("fx_conversion_in"), False),
             ("Net Operating Cash Flow",
              {c: (mbc[c]["income"] + mbc[c]["transfer_in_external"]
                   - mbc[c]["expense"] - mbc[c]["transfer_out_external"])
               for c in cf_ccies}, True),
+            ("Currency Conversion",
+             {c: mbc[c]["fx_conversion_in"] - mbc[c]["fx_conversion_out"]
+              for c in cf_ccies}, False),
             ("Net Change in Cash", _col("net_change_cash"), True),
         ]
 
@@ -409,7 +410,7 @@ def render_report(result: dict[str, Any], consolidated: bool = False,
         out.append(
             "_Internal transfers between your own accounts net to zero and are "
             "excluded from net cash flow; see §Internal Transfers. Currency "
-            "conversions are shown at face value per currency — their SGD-equivalent "
+            "Conversion is shown at face value per currency — its SGD-equivalent "
             "difference is the realized FX gain/loss in §Currency Conversions._\n"
         )
         out.append("")
