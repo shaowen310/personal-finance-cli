@@ -58,6 +58,7 @@ from pfa_ir_schema.relations import (
     REL_INTRA_BANK,
     REL_INVESTMENT_TRANSFER,
 )
+from pfa_ir_schema import Transaction
 
 # Keywords that mark a transaction as a genuine transfer (as opposed to an
 # ordinary spend/income that merely happens to be opposite another transaction
@@ -586,6 +587,49 @@ def detect_cc_payments(statement: Any) -> Any:
     return statement
 
 
+def _add_investment_writeoff(statement: Any, asset_txn: Any, ref_inv: set[str]) -> bool:
+    """Pair a single-leg investment transfer with a synthetic write-off.
+
+    The asset leg (current/savings) references one of the user's own investment
+    account numbers but carries no matching investment-account leg in the IR
+    (the investment account often does not record its principal). To keep the
+    internal transfer reconciled — so funds-flow analysis nets it to zero —
+    synthesise the missing counterparty leg: a *write-off* transaction on the
+    referenced investment account with the opposite signed amount, cross-linked
+    to the asset leg. Returns True when a write-off was added.
+    """
+    target = None
+    for acct in statement.accounts:
+        if (acct.account_type or "").lower() not in _INVESTMENT_ACCOUNT_TYPES:
+            continue
+        digits = re.sub(r"\D", "", acct.account_no or "")
+        if digits and digits in ref_inv:
+            target = acct
+            break
+    if target is None:
+        return False
+    base_id = asset_txn.txn_id or f"inv-wf-{asset_txn.posted_date}-{abs(asset_txn.amount)}"
+    writeoff_id = f"{base_id}::investment-writeoff"
+    if any((t.txn_id or "") == writeoff_id for t in target.transactions):
+        return False
+    writeoff = Transaction(
+        txn_id=writeoff_id,
+        posted_date=asset_txn.posted_date,
+        amount=-asset_txn.amount,
+        currency=asset_txn.currency,
+        description=(
+            f"Investment transfer write-off (counterparty) — {asset_txn.description}"
+        ),
+        is_internal_transfer=True,
+        link_labels=[REL_INVESTMENT_TRANSFER],
+        linked_txn_ids=[asset_txn.txn_id],
+        balance_after=None,
+    )
+    target.transactions = list(target.transactions) + [writeoff]
+    asset_txn.linked_txn_ids = list(asset_txn.linked_txn_ids) + [writeoff_id]
+    return True
+
+
 def detect_investment_transfers(statement: Any) -> Any:
     """Detect transfers from an asset account into one of the user's own
     investment accounts (SRS / Unit Trust / Fixed Deposit) and tag them internal.
@@ -608,8 +652,11 @@ def detect_investment_transfers(statement: Any) -> Any:
     * **Single leg (source only)** — an asset-account leg whose description
       references one of the user's own investment account numbers but with no
       matching investment leg in the IR. It is flagged ``is_internal_transfer``
-      (label ``"investment_transfer"``) without a link, so it is excluded from
-      expenses yet not flagged as an orphan.
+      (label ``"investment_transfer"``) and paired with a synthetic write-off
+      transaction on the referenced investment account (opposite signed amount,
+      cross-linked) so the internal transfer nets to zero in funds-flow
+      analysis. The investment side is still excluded from expenses and is not
+      flagged as an orphan.
 
     Mutates and returns *statement*. Idempotent (skips already-linked txns).
     """
@@ -682,12 +729,17 @@ def detect_investment_transfers(statement: Any) -> Any:
             if asset_txn.is_internal_transfer:
                 continue
             refs = set(re.findall(r"\d+", asset_txn.description or ""))
-            if not (refs & inv_nos):
+            ref_inv = refs & inv_nos
+            if not ref_inv:
                 continue
             asset_txn.is_internal_transfer = True
             if REL_INVESTMENT_TRANSFER not in asset_txn.link_labels:
                 asset_txn.link_labels = list(asset_txn.link_labels) + [REL_INVESTMENT_TRANSFER]
             matched_single += 1
+            # Pair the single-leg source with a synthetic write-off on the
+            # counterparty investment account so the internal transfer nets to
+            # zero in funds-flow analysis (see ``_add_investment_writeoff``).
+            _add_investment_writeoff(statement, asset_txn, ref_inv)
             warn = (
                 f"Investment transfer (single-leg) detected: (asset "
                 f"{asset_acct.account_no}) → own investment account, "

@@ -555,6 +555,17 @@ def render_report(result: dict[str, Any], consolidated: bool = False,
                               expense_detail_totals.get(cat, 0.0))
 
     # ---- Internal Transfers (own-account moves) -----------------------------
+    # Own-account moves must net to zero per currency: every transfer has an
+    # equal and opposite leg. Compute the residual here so a warning can be
+    # surfaced both in this section and in §Notes & Caveats.
+    internal_imbalance: dict[str, float] = {}
+    if transfer_drilldown:
+        _net_by_ccy: dict[str, float] = defaultdict(float)
+        for entry in transfer_drilldown:
+            for t in entry.get("transactions", []):
+                _net_by_ccy[t["currency"]] += _it_display_amount(t)
+        internal_imbalance = {c: v for c, v in _net_by_ccy.items() if abs(v) > 0.005}
+
     if transfer_drilldown:
         out.append("## Internal Transfers\n")
         out.append(
@@ -627,6 +638,17 @@ def render_report(result: dict[str, Any], consolidated: bool = False,
             total_parts.append(f"**{fmt(totals_sgd)}**")
             out.append(" | ".join(total_parts) + " |")
         out.append("")
+
+        if internal_imbalance:
+            out.append(
+                "> **⚠ WARNING: Internal transfers do not net to zero.** Each own-account "
+                "move must have an equal and opposite leg; the residual below means a leg "
+                "is missing or unpaired (e.g. an investment transfer whose counterparty leg "
+                "is absent from the IR, or a transfer mis-flagged as internal)."
+            )
+            for c in sorted(internal_imbalance):
+                out.append(f"> - {c}: net {fmt(internal_imbalance[c])}")
+            out.append("")
 
         # Combine all inflow/outflow legs into a single drill-down table titled
         # "Transactions" (the summary above still shows them split by direction).
@@ -760,4 +782,10 @@ def render_report(result: dict[str, Any], consolidated: bool = False,
         "- This is an initial automated pass. Transfer vs expense classification and asset "
         + "coverage (e.g. ICBC fixed-deposit rollovers) may need tuning \u2014 refine from here.\n"
     )
+    if internal_imbalance:
+        out.append(
+            f"- **⚠ Internal transfers did not net to zero** "
+            f"({', '.join(f'{c} {fmt(v)}' for c, v in sorted(internal_imbalance.items()))}). "
+            "A missing/unpaired leg was detected \u2014 see \u00a7Internal Transfers.\n"
+        )
     return "\n".join(out)
