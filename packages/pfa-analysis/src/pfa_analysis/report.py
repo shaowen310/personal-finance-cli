@@ -252,3 +252,7 @@ def main(argv: list[str] | None = None) -> int:
     _ = out_path.write_text(text, encoding="utf-8")
     print(f"Written: {out_path}")
     return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -13,24 +13,21 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import shutil
 import stat
 import sys
 import traceback
-from collections import Counter
 from pathlib import Path
 
+import subprocess
+
 from pfa_parser import SGBankPDFParser
-from pfa_ir_schema import from_json as ir_from_json
 
 # Make repo root importable
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from pfa_ir_consolidator.consolidate import consolidate_statements  # noqa: E402
-from pfa_analysis.categorize import categorize  # noqa: E402
 from pfa_cli.dates import parse_start_date, parse_end_date  # noqa: E402
 
 
@@ -87,85 +84,94 @@ def _step1_parse_pdfs(pdf_paths: list[Path]) -> bool:
 
 
 def _step2_consolidate() -> Path | None:
-    """Consolidate all .ir.json into consolidated.ir.json."""
+    """Consolidate all .ir.json into consolidated.ir.json via the CLI.
+
+    Delegating to ``consolidate.py`` keeps this pipeline in lock-step with the
+    canonical consolidation path (all transfer detectors, link verification,
+    optional FX embed) so detector changes there apply here automatically.
+    """
     ir_paths = sorted(IR_DIR.glob("*.ir.json"))
     if not ir_paths:
         print("  No .ir.json files found — skipping consolidation.")
         return None
 
-    print(f"  Consolidating {len(ir_paths)} .ir.json files …", end=" ", flush=True)
+    out_path = OUTPUT_DIR / "consolidated.ir.json"
+    consolidate_cli = (
+        REPO_ROOT / "packages" / "pfa-ir-consolidator" / "src"
+        / "pfa_ir_consolidator" / "consolidate.py"
+    )
+    cmd = [
+        sys.executable, str(consolidate_cli),
+        *[str(p) for p in ir_paths],
+        "-o", str(out_path),
+        "--embed-fx",
+    ]
+
+    print(f"  Consolidating {len(ir_paths)} .ir.json files via CLI …", end=" ", flush=True)
     try:
-        stmts_with_paths: list[tuple[str, object]] = []
-        for p in ir_paths:
-            stmt = ir_from_json(p.read_text(encoding="utf-8"))
-            stmts_with_paths.append((str(p), stmt))
-
-        consolidated, total_in, deduped, filtered = consolidate_statements(
-            stmts_with_paths, do_dedup=True
-        )
-
-        # Transfer detection & postprocessing
-        from pfa_ir_consolidator.detect_transfers import (
-            detect_cc_payments,
-            detect_currency_conversions,
-            detect_inter_bank_transfers,
-            detect_intra_bank_transfers,
-        )
-        consolidated = detect_inter_bank_transfers(consolidated)
-        consolidated = detect_intra_bank_transfers(consolidated)
-        consolidated = detect_currency_conversions(consolidated)
-        consolidated = detect_cc_payments(consolidated)
-
-        from pfa_parser.postprocess import verify_txn_links
-        consolidated = verify_txn_links(consolidated)
-
-        # Embed FX rates into extras.consolidation.fx so downstream analysis /
-        # rendering can convert foreign balances to SGD.
-        from pfa_ir_consolidator.consolidate import embed_fx_rates
-        consolidated = embed_fx_rates(consolidated)
-
-        out_path = OUTPUT_DIR / "consolidated.ir.json"
-        _ = out_path.write_text(consolidated.to_json(indent=2), encoding="utf-8")
-
-        print(
-            f"OK  accounts={len(consolidated.accounts)} "
-            + f"txns_in={total_in} txns_out={total_in - deduped - filtered} "
-            + f"deduped={deduped} filtered={filtered} → {out_path.name}"
-        )
-        return out_path
+        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
     except Exception:
-        print("FAILED")
+        print("FAILED to launch CLI")
         traceback.print_exc()
         return None
 
+    if result.returncode != 0:
+        print("FAILED")
+        if result.stdout:
+            print(result.stdout)
+        if result.stderr:
+            print(result.stderr, file=sys.stderr)
+        return None
+
+    print("OK → " + out_path.name)
+    for line in result.stdout.splitlines():
+        print("  " + line)
+    return out_path
+
 
 def _step3_categorize(consolidated_path: Path) -> bool:
-    """Categorize transactions from consolidated.ir.json."""
-    print(f"  Categorizing {consolidated_path.name} …", end=" ", flush=True)
-    try:
-        result = categorize(
-            input_path=consolidated_path,
-            rules_path=RULES_PATH,
-        )
-        out_path = OUTPUT_DIR / "categories.json"
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        _ = out_path.write_text(
-            json.dumps(result, indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8",
-        )
+    """Categorize transactions via the ``categorize`` CLI → categories.json.
 
-        # Quick summary
-        counts = Counter(result.values())
-        n_total = len(result)
-        n_uncat = counts.get("Other: Other", 0)
-        n_cat = n_total - n_uncat
-        coverage = n_cat / n_total * 100 if n_total else 0
-        print(f"OK  {n_total} txns, {len(counts)} categories, {coverage:.1f}% coverage → {out_path.name}")
-        return True
+    Delegating to the CLI keeps the pipeline in lock-step with the canonical
+    categorizer. The CLI exits non-zero on coverage issues but still writes
+    categories.json, so a coverage failure is treated as a warning, not a hard
+    error (matching the old in-process behaviour).
+    """
+    out_path = OUTPUT_DIR / "categories.json"
+    categorize_cli = (
+        REPO_ROOT / "packages" / "pfa-analysis" / "src"
+        / "pfa_analysis" / "categorize.py"
+    )
+    cmd = [
+        sys.executable, str(categorize_cli),
+        str(consolidated_path),
+        "-o", str(out_path),
+        "--rules", str(RULES_PATH),
+    ]
+
+    print(f"  Categorizing {consolidated_path.name} via CLI …", end=" ", flush=True)
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
     except Exception:
-        print("FAILED")
+        print("FAILED to launch CLI")
         traceback.print_exc()
         return False
+
+    if result.returncode != 0 and not out_path.exists():
+        print("FAILED")
+        if result.stdout:
+            print(result.stdout)
+        if result.stderr:
+            print(result.stderr, file=sys.stderr)
+        return False
+
+    if result.returncode != 0:
+        print("OK (with coverage warnings)")
+    else:
+        print("OK → " + out_path.name)
+    for line in result.stdout.splitlines():
+        print("  " + line)
+    return True
 
 
 def _step4_render_report(
@@ -173,27 +179,56 @@ def _step4_render_report(
     start_date: str | None = None,
     end_date: str | None = None,
 ) -> None:
-    """Generate markdown reports from consolidated IR + categories."""
+    """Generate the markdown finance report via the ``report`` CLI.
+
+    The report CLI consumes categories.json (default: alongside the input) and
+    writes ``<input_stem>_Finance_Report.md``; we rename that to ``finance_report.md``
+    to preserve the pipeline's historical output filename.
+    """
     categories_path = OUTPUT_DIR / "categories.json"
     if not categories_path.exists():
         print("  categories.json not found — skipping reports.")
         return
 
-    # ── 4a. Balance Sheet & Cash Flow Report ───────────────────────────────
-    print("  4a. Finance report …", end=" ", flush=True)
-    try:
-        from pfa_analysis.report import render_consolidated_report
+    report_cli = (
+        REPO_ROOT / "packages" / "pfa-analysis" / "src"
+        / "pfa_analysis" / "report.py"
+    )
+    cmd = [
+        sys.executable, str(report_cli),
+        str(consolidated_path), str(OUTPUT_DIR),
+        "--categories", str(categories_path),
+    ]
+    if start_date:
+        cmd += ["--start-date", start_date]
+    if end_date:
+        cmd += ["--end-date", end_date]
 
-        md = render_consolidated_report(
-            consolidated_path, categories_path,
-            start_date=start_date, end_date=end_date,
-        )
-        out_path = OUTPUT_DIR / "finance_report.md"
-        _ = out_path.write_text(md, encoding="utf-8")
-        print(f"OK → {out_path.name}")
+    print("  4a. Finance report via CLI …", end=" ", flush=True)
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
     except Exception:
-        print("FAILED")
+        print("FAILED to launch CLI")
         traceback.print_exc()
+        return
+
+    if result.returncode != 0:
+        print("FAILED")
+        if result.stdout:
+            print(result.stdout)
+        if result.stderr:
+            print(result.stderr, file=sys.stderr)
+        return
+
+    # Preserve the historical output filename (report CLI writes
+    # "<stem>_Finance_Report.md" = "consolidated_Finance_Report.md").
+    cli_md = OUTPUT_DIR / (consolidated_path.stem + "_Finance_Report.md")
+    final_md = OUTPUT_DIR / "finance_report.md"
+    if cli_md.exists() and cli_md != final_md:
+        cli_md.replace(final_md)
+    print("OK → " + final_md.name)
+    for line in result.stdout.splitlines():
+        print("  " + line)
 
 
 def main(start_date: str | None = None, end_date: str | None = None) -> None:
