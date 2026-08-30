@@ -150,7 +150,7 @@ def render_report(result: dict[str, Any], consolidated: bool = False,
     out: list[str] = []
 
     # ---- Title ---------------------------------------------------------------
-    title = "Consolidated Balance Sheet & Cash Flow" if consolidated else "Personal Balance Sheet & Cash Flow"
+    title = "Consolidated Balance Sheet & Funds Flow" if consolidated else "Personal Balance Sheet & Funds Flow"
     out.append(f"# {title} \u2014 {result['source']}\n")
     out.append(f"_Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}_\n")
     if not consolidated:
@@ -177,7 +177,7 @@ def render_report(result: dict[str, Any], consolidated: bool = False,
                 savings_disp = f"{m['savings_rate'] * 100:.1f}%"
             out.append(
                 f"- **{ccy}** \u2014 Closing: {fmt(m['closing'])} | "
-                + f"Net Cash Flow: {fmt(m['net_change_cash'])} | "
+                + f"Net Funds Flow: {fmt(m['net_change_cash'])} | "
                 + f"Net Operating: {fmt(m['net_operating'])} | "
                 + f"Savings: {savings_disp}"
             )
@@ -287,7 +287,7 @@ def render_report(result: dict[str, Any], consolidated: bool = False,
     if use_fx:
         out.append("")  # blank line after table
     if not mbc:
-        out.append("_No transactions \u2014 cash-flow statement below is not applicable._\n")
+        out.append("_No transactions \u2014 funds-flow statement below is not applicable._\n")
 
     # ---- 2.1 Balance Sheet Drill-Down (by bucket -> currency) ---------------
     if drilldown:
@@ -345,12 +345,12 @@ def render_report(result: dict[str, Any], consolidated: bool = False,
 
         out.append("")
 
-    # ---- 3. Cash Flow Statement ----------------------------------------------
+    # ---- 3. Funds Flow Statement ---------------------------------------------
     # Transposed layout (mirrors the Balance Sheet): cash-flow line items as
     # rows, one column per currency, final column = SGD Equivalent. Outflows
     # (Expense, Transfer Out) and the derived net figures are shown with their
     # natural sign (outflows negative).
-    out.append("## 3. Cash Flow Statement\n")
+    out.append("## 3. Funds Flow Statement\n")
     if mbc:
         cf_ccies = sorted(mbc)
         # Helper: pull a per-currency field across all currencies.
@@ -372,7 +372,7 @@ def render_report(result: dict[str, Any], consolidated: bool = False,
                         for c in cf_ccies}, False),
             ("Expense", {c: -(mbc[c]["expense"] + mbc[c]["transfer_out_external"])
                          for c in cf_ccies}, False),
-            ("Net Operating Cash Flow",
+            ("Net Operating Funds Flow",
              {c: (mbc[c]["income"] + mbc[c]["transfer_in_external"]
                   - mbc[c]["expense"] - mbc[c]["transfer_out_external"])
               for c in cf_ccies}, True),
@@ -382,7 +382,7 @@ def render_report(result: dict[str, Any], consolidated: bool = False,
             ("Net Change in Cash", _col("net_change_cash"), True),
         ]
 
-        header_parts = ["| Cash Flow"]
+        header_parts = ["| Funds Flow"]
         for c in cf_ccies:
             header_parts.append(c)
         if use_fx:
@@ -409,7 +409,7 @@ def render_report(result: dict[str, Any], consolidated: bool = False,
             out.append(" | ".join(cf_vals) + " |")
         out.append(
             "_Internal transfers between your own accounts net to zero and are "
-            "excluded from net cash flow; see §Internal Transfers. Currency "
+            "excluded from the funds flow; see §Internal Transfers. Currency "
             "Conversion is shown at face value per currency — its SGD-equivalent "
             "difference is the realized FX gain/loss in §Currency Conversions._\n"
         )
@@ -534,7 +534,7 @@ def render_report(result: dict[str, Any], consolidated: bool = False,
         out.append(
             "_Own-account moves between the holder's accounts. The summary shows the "
             "gross volume moved per currency; each pair nets to ~0 and is excluded "
-            "from income/expense and net cash flow. Individual transactions follow "
+            "from income/expense and the funds flow. Individual transactions follow "
             "below (same layout as the income/expense breakdowns)._\n"
         )
         int_ccies: list[str] = sorted(set(
@@ -636,12 +636,12 @@ def render_report(result: dict[str, Any], consolidated: bool = False,
     for ccy in sorted(mbc):
         m = mbc[ccy]
         if m["net_operating"] <= 0:
-            out.append(f"- **{ccy}:** operating cash flow non-positive \u2014 income did not cover spending.\n")
+            out.append(f"- **{ccy}:** operating funds flow non-positive \u2014 income did not cover spending.\n")
         elif m["savings_rate"] >= 0.30:
-            out.append(f"- **{ccy}:** strong retained cash flow (\u226530%).\n")
+            out.append(f"- **{ccy}:** strong retained funds flow (\u226530%).\n")
         if m["reconciliation_ok"] is False:
             out.append(
-                f"- **{ccy}:** balance/cash-flow gap \u2014 money likely moved to/from an "
+                f"- **{ccy}:** balance/funds-flow gap \u2014 money likely moved to/from an "
                 + "account not in this statement (external transfer).\n"
             )
         if m["transfer_out"] > 0:
@@ -675,7 +675,7 @@ def render_report(result: dict[str, Any], consolidated: bool = False,
     # ---- 6. Notes & Caveats --------------------------------------------------
     out.append("## " + ("6" if use_fx else "5") + ". Notes & Caveats\n")
     out.append(
-        "- Balance sheet + cash flow only; merchant-level spending categorization is out of scope.\n"
+        "- Balance sheet + funds flow only; merchant-level spending categorization is out of scope.\n"
     )
     out.append(
         "- Transfers (own-account / fixed-deposit moves) are separated from Income/Expense. "
