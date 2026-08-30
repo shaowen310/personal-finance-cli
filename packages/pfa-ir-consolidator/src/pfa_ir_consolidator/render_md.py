@@ -19,13 +19,17 @@ from typing import Any
 
 # Allow running as a standalone script from scripts/ or the repo root.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import pfa_ir_schema  # noqa: E402
-from pfa_ir_consolidator.render_model import build_render_model, TXN_SECTION_ORDER  # noqa: E402
-from pfa_fx import (  # noqa: E402
+import pfa_ir_schema
+from pfa_fx import (
     FXResult,
     collect_currencies,
     get_fx_rates,
     get_provider,
+)
+
+from pfa_ir_consolidator.render_model import (
+    TXN_SECTION_ORDER,
+    build_render_model,
 )
 
 
@@ -34,7 +38,7 @@ def _money(v: float | None, currency: str = "") -> str:
         return "—"
     try:
         return f"{v:,.2f} {currency}".strip()
-    except Exception:  # pragma: no cover - defensive
+    except (ValueError, TypeError):  # pragma: no cover - defensive
         return str(v)
 
 
@@ -462,7 +466,7 @@ def render(
         lines.append("")
 
     # --- Warnings ---
-    fx_warnings = fx_result.warnings if fx_result else []
+    fx_warnings = list(getattr(fx_result, "warnings", [])) if fx_result else []
     if model.warnings or fx_warnings:
         lines.append("## Warnings")
         lines.append("")
@@ -490,20 +494,8 @@ def main() -> None:
         help="FX as-of date (YYYY-MM-DD). Default: statement period_to, else today.",
     )
     _ = ap.add_argument(
-        "--fx-cache-dir", default=None,
-        help="FX cache directory. Default: bank-ir-consolidate/cache/.",
-    )
-    _ = ap.add_argument(
         "--fx-provider", default="frankfurter",
         help="FX provider name (pluggable). Default: frankfurter.",
-    )
-    _ = ap.add_argument(
-        "--fx-offline", action="store_true",
-        help="Never fetch live; use only the cache, then hardcoded fallback rates.",
-    )
-    _ = ap.add_argument(
-        "--fx-force-refresh", action="store_true",
-        help="Ignore the cache and re-fetch live rates.",
     )
     _ = ap.add_argument(
         "--fx-no-embed", action="store_true",
@@ -523,21 +515,18 @@ def main() -> None:
     as_of = args.fx_date or (stmt.statement_meta.period_to if stmt.statement_meta else None)
     currencies = collect_currencies(stmt)
     fx = get_fx_rates(
+        currencies,
         as_of=as_of,
-        symbols=currencies,
         provider=get_provider(args.fx_provider),
-        cache_dir=args.fx_cache_dir,
-        offline=args.fx_offline,
-        force_refresh=args.fx_force_refresh,
     )
 
-    from pfa_parser.renderers.helpers import md_masked_description as _md_helpers
-    import pfa_ir_schema.common as _ir_common
+    import pfa_ir_schema.common as ir_common
+    from pfa_parser.renderers import helpers as md_helpers
 
     md = render(
         build_render_model(stmt, fx_rates=fx.rates),
-        _md_helpers,
-        _ir_common,
+        md_helpers,
+        ir_common,
         do_mask=not args.no_mask,
         fx_result=fx,
     )
@@ -558,9 +547,9 @@ def main() -> None:
             "as_of": fx.as_of,
             "fetched_at": fx.fetched_at,
             "rates_sgd_per_unit": fx.rates,
-            "symbols_requested": fx.symbols_requested,
+            "symbols_requested": currencies,
             "missing": fx.missing,
-            "warnings": fx.warnings,
+            "warnings": list(getattr(fx, "warnings", [])),
         }
         extras["consolidation"] = cons
         stmt.extras = extras

@@ -17,7 +17,7 @@ from collections import defaultdict
 from datetime import datetime
 from typing import Any
 
-from pfa_fx import BASE_CCY, convert_to_sgd as _pfa_convert_to_sgd
+from pfa_fx import BASE_CCY, convert_to_sgd as pfa_convert_to_sgd
 
 # ---------------------------------------------------------------------------
 # Shared FX utilities (used by both renderer & analyze.py)
@@ -36,7 +36,7 @@ def convert_to_sgd(amount: float, currency: str, fx_rates: dict[str, Any] | None
     """
     if fx_rates is None:
         return None
-    return _pfa_convert_to_sgd(amount, currency, fx_rates["rates"])
+    return pfa_convert_to_sgd(amount, currency, fx_rates["rates"])
 
 
 # ---------------------------------------------------------------------------

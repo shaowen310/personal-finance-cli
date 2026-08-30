@@ -46,7 +46,7 @@ from pfa_ir_verifier import demote_orphan_internal_transfers, promote_internal_t
 from pfa_ir_schema.relations import REL_CURRENCY_CONVERSION
 
 # FX rate retrieval (cached, base = SGD). Falls back to pfa_fx defaults.
-from pfa_fx import fetch_fx_rates as _fetch_fx_rates
+from pfa_fx import fetch_fx_rates
 from pfa_fx import DEFAULT_FX_RATES
 
 
@@ -1018,7 +1018,7 @@ def _resolve_fx_rates(as_of: str | None, fx_rates: dict[str, float] | None
     if fx_rates:
         return dict(fx_rates), as_of or "", "caller-provided"
     date = as_of or ""
-    fx = _fetch_fx_rates(date) if date else None
+    fx = fetch_fx_rates(date) if date else None
     if fx and fx.get("rates"):
         return (
             {k: float(v) for k, v in fx["rates"].items()},

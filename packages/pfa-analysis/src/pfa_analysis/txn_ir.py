@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from pfa_ir_schema import from_json as _official_from_json
+from pfa_ir_schema import from_json
 
 
 @dataclass
@@ -43,7 +43,7 @@ def parse_ir(path: Path) -> TxnIR:
     attaching per-account metadata (``institution``, ``account_no``) to
     each row.  ``posted_date`` is normalised to ``date``.
     """
-    statement = _official_from_json(path.read_text(encoding="utf-8"))
+    statement = from_json(path.read_text(encoding="utf-8"))
 
     txns_raw: list[dict[str, Any]] = []
     account_types: dict[str, str] = {}
