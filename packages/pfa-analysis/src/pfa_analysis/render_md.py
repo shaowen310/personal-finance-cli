@@ -66,7 +66,8 @@ def _it_display_amount(txn: dict[str, Any]) -> float:
 
 def _render_txn_detail_table(out: list[str], entries: list[dict[str, Any]], key: str,
                              use_fx: bool,
-                             fx_rates: dict[str, Any] | None) -> dict[str, float]:
+                             fx_rates: dict[str, Any] | None,
+                             signed_total: bool = False) -> dict[str, float]:
     """Append a per-transaction detail table (used by the income, expense and
     transfer drill-downs) to ``out``.
 
@@ -81,10 +82,13 @@ def _render_txn_detail_table(out: list[str], entries: list[dict[str, Any]], key:
     amount, signed so refund rows display negative and net correctly) columns,
     plus an ``SGD Eq.`` column when ``use_fx`` is set.
 
-    Returns a mapping of entry heading -> "Total SGD Eq." value. The total uses
-    the SAME formula as the per-category summary table (net the signed amounts
-    per currency, convert each net, then take the absolute value) so the two
-    always agree; callers assert this equality via ``_assert_sgd_total``.
+    Returns a mapping of entry heading -> "Total SGD Eq." value. By default the
+    total nets the signed amounts per currency, converts each net, then takes the
+    absolute value — correct for single-signed sections (Income/Expense) so it
+    matches the per-category summary. When ``signed_total`` is set (used for the
+    Internal Transfers "Transactions" table, which mixes inflow and outflow legs
+    in one entry), the sign is preserved so the total is a plain arithmetic sum
+    that agrees with the section's signed summary total.
     """
     totals: dict[str, float] = {}
     for entry in entries:
@@ -118,10 +122,16 @@ def _render_txn_detail_table(out: list[str], entries: list[dict[str, Any]], key:
                     f"{t.get('account_type', '')} | {desc} | {ccy} | {oc} |"
                 )
         if use_fx:
-            total = sum(
-                abs(convert_to_sgd(net, c, fx_rates) or 0.0)
-                for c, net in ccy_net.items()
-            )
+            if signed_total:
+                total = sum(
+                    (convert_to_sgd(net, c, fx_rates) or 0.0)
+                    for c, net in ccy_net.items()
+                )
+            else:
+                total = sum(
+                    abs(convert_to_sgd(net, c, fx_rates) or 0.0)
+                    for c, net in ccy_net.items()
+                )
             totals[heading] = total
             out.append(
                 f"| | | | | **Total SGD Eq.** | | | **{fmt(total)}** |"
@@ -634,7 +644,7 @@ def render_report(result: dict[str, Any], consolidated: bool = False,
                 out,
                 [{"category": "Transactions", "by_currency": {},
                   "transactions": combined_txns}],
-                "category", use_fx, fx_rates,
+                "category", use_fx, fx_rates, signed_total=True,
             )
 
     # ---- Realized FX Gain/Loss ----------------------------------------------

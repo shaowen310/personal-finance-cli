@@ -1,6 +1,5 @@
 """Shared date-parsing utilities for the PFA CLI and test pipeline.
 
-Both ``pfa analyze`` and ``tests/run_full_pipeline.py`` use the same
 ``YYYYMMDD`` / ``YYYYMM`` date format, with ``YYYYMM`` expanding to a
 full month (start-of-month for start dates, end-of-month for end dates).
 """

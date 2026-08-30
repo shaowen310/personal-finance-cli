@@ -81,13 +81,13 @@ After either option, verify with `pfa --help`.
 
 ```bash
 # Full pipeline (all PDFs in tests/cache/)
-python tests/run_full_pipeline.py
+pwsh tests/run_full_pipeline.ps1
 
 # Date-filtered range (YYYYMMDD or YYYYMM format)
-python tests/run_full_pipeline.py -s 20260601 -e 20260615
+pwsh tests/run_full_pipeline.ps1 -s 20260601 -e 20260615
 
 # Whole month (YYYYMM → -s uses 1st, -e uses last day)
-python tests/run_full_pipeline.py -s 202606 -e 202606
+pwsh tests/run_full_pipeline.ps1 -s 202606 -e 202606
 ```
 
 Outputs in `tests/outputs/`:
