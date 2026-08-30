@@ -899,6 +899,33 @@ def _internal_transfer_ids(
     return [r.get("txn_id", "") for r in ir_rows if r.get("is_internal_transfer")]
 
 
+def _group_linked_adjacent(txns: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Reorder *txns* so transactions linked via ``linked_txn_ids`` sit next to each other.
+
+    Used for the internal-transfer breakdown: both legs of an own-account move
+    (e.g. a current->savings transfer) are surfaced adjacent rather than scattered
+    by amount. A stable base order (descending absolute amount) is preserved for
+    the first-seen member of each linked group; each of its partners is inserted
+    immediately after it. Transactions with no in-list partner keep their base
+    position. Order does not affect any totals (they are summed independently).
+    """
+    by_id = {t.get("txn_id", ""): t for t in txns}
+    placed: set[str] = set()
+    ordered: list[dict[str, Any]] = []
+    for t in sorted(txns, key=lambda x: -abs(float(x.get("amount", 0.0)))):
+        tid = t.get("txn_id", "")
+        if tid in placed:
+            continue
+        ordered.append(t)
+        placed.add(tid)
+        for pid in (t.get("linked_txn_ids", []) or []):
+            p = by_id.get(pid)
+            if p is not None and pid not in placed:
+                ordered.append(p)
+                placed.add(pid)
+    return ordered
+
+
 def build_transfer_drilldown(
     consolidated_path: Path,
     categories_path: Path,
@@ -954,13 +981,15 @@ def build_transfer_drilldown(
             "bank": str(row.get("bank", "")),
             "account": str(row.get("account", "")),
             "account_type": str(row.get("account_type", "")),
+            "txn_id": str(row.get("txn_id", "")),
+            "linked_txn_ids": list(row.get("linked_txn_ids", []) or []),
         })
 
     for cat in sorted(tr_ccy, key=lambda c: -sum(abs(v) for v in tr_ccy[c].values())):
         transfer_drill.append({
             "category": cat,
             "by_currency": dict(tr_ccy[cat]),
-            "transactions": sorted(tr_txns[cat], key=lambda t: -t["amount"]),
+            "transactions": _group_linked_adjacent(tr_txns[cat]),
         })
 
     return transfer_drill
