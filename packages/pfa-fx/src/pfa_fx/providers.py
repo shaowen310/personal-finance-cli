@@ -14,10 +14,8 @@ from typing import Any, Protocol, runtime_checkable
 
 from .defaults import BASE_CCY
 
-# Latest Frankfurter API base (ECB data, free, no key). The legacy
-# ``api.frankfurter.app`` host is kept as a fallback for older callers.
+# Latest Frankfurter API base (ECB data, free, no key).
 DEFAULT_BASE_URL = os.environ.get("PFA_FX_BASE_URL", "https://api.frankfurter.dev/v1")
-LEGACY_BASE_URL = "https://api.frankfurter.app"
 
 
 @runtime_checkable
@@ -64,21 +62,11 @@ class FrankfurterProvider:
         try:
             data = _http_get_json(url)
         except Exception as e:  # noqa: BLE001 - degrade, never crash the caller
-            # Try the legacy host once before giving up.
-            try:
-                legacy = LEGACY_BASE_URL
-                if as_of:
-                    url = f"{legacy}/{as_of}?from={BASE_CCY}&to={symbols_csv}"
-                else:
-                    url = f"{legacy}/latest?from={BASE_CCY}&to={symbols_csv}"
-                data = _http_get_json(url)
-            except Exception as e2:  # noqa: BLE001
-                print(
-                    f"[WARN] Failed to fetch FX rates from {self.name}: {e}; "+
-                    f"legacy fallback also failed: {e2}",
-                    file=__import__("sys").stderr,
-                )
-                return None
+            print(
+                f"[WARN] Failed to fetch FX rates from {self.name}: {e}",
+                file=__import__("sys").stderr,
+            )
+            return None
         if not isinstance(data, dict):
             return None
         rates = data.get("rates")
