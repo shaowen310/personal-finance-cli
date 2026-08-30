@@ -21,7 +21,7 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import pfa_ir_schema  # noqa: E402
 from pfa_ir_consolidator.render_model import build_render_model, TXN_SECTION_ORDER  # noqa: E402
-from pfa_ir_consolidator.fx_rates import (  # noqa: E402
+from pfa_fx import (  # noqa: E402
     FXResult,
     collect_currencies,
     get_fx_rates,

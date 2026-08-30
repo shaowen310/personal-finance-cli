@@ -14,8 +14,3 @@ def convert_to_sgd(amount: float, currency: str, fx_rates: dict[str, float]) -> 
     if rate is None:
         return None
     return amount * rate
-
-
-def sgd_equiv(balance: float, currency: str, fx_rates: dict[str, float]) -> float | None:
-    """Alias for :func:`convert_to_sgd` (back-compat with pfa-ir-consolidator)."""
-    return convert_to_sgd(balance, currency, fx_rates)

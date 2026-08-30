@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .defaults import BASE_CCY, DEFAULT_WATCH_SYMBOLS
+from .defaults import DEFAULT_WATCH_SYMBOLS
 from .rates import FXResult, get_fx_rates
 
 
@@ -36,10 +36,3 @@ def fetch_fx_rates(
     requested = currencies if currencies is not None else DEFAULT_WATCH_SYMBOLS
     result = get_fx_rates(requested, as_of=date_str)
     return fx_result_to_wrapper(result)
-
-
-def extract_embedded_fx(rates_sgd_per_unit: dict[str, float], as_of: str = "") -> dict[str, Any]:
-    """Wrap already-SGD-per-unit embedded rates (e.g. from a consolidated IR)."""
-    merged = {BASE_CCY: 1.0, **{k.upper(): float(v) for k, v in rates_sgd_per_unit.items()}}
-    merged[BASE_CCY] = 1.0
-    return {"rates": merged, "date": as_of, "source": "embedded in consolidated IR"}

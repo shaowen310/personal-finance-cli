@@ -23,26 +23,3 @@ REL_FD_PRINCIPAL = "fd_principal"
 REL_FD_INTEREST = "fd_interest"
 REL_CURRENCY_CONVERSION = "currency_conversion"
 REL_CC_PAYMENT = "cc_payment"
-
-# All recognised relationship labels.
-LINK_LABELS: frozenset[str] = frozenset(
-    {
-        REL_INTERNAL_TRANSFER,
-        REL_INTER_BANK,
-        REL_INTRA_BANK,
-        REL_FD_PRINCIPAL,
-        REL_FD_INTEREST,
-        REL_CURRENCY_CONVERSION,
-        REL_CC_PAYMENT,
-    }
-)
-
-# Labels that denote a real internal transfer (paired, equal-amount, opposite
-# sign). These are the only ones allowed to set is_internal_transfer = True.
-INTERNAL_TRANSFER_LABELS: frozenset[str] = frozenset(
-    {
-        REL_INTERNAL_TRANSFER,
-        REL_INTER_BANK,
-        REL_INTRA_BANK,
-    }
-)
