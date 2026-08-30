@@ -179,6 +179,10 @@ def _detect_orphans(txns: list[Txn]) -> list[InternalTransferIssue]:
             if any(str(p) in present_ids for p in (t.get("linked_txn_ids", []) or []))
         }
         for t in rows:
+            # Investment transfers are allowed single-leg (the investment account
+            # may not record its principal); never treat them as unpaired orphans.
+            if "investment_transfer" in (t.get("link_labels", []) or []):
+                continue
             if round(abs(float(t["amount"])), 2) in orphan_mags and str(t.get("txn_id", "")) not in linked_pairs:
                 issues.append(
                     InternalTransferIssue(
@@ -260,24 +264,29 @@ def demote_orphan_internal_transfers(
     """
     txns = _iter_txns(ir)
     issues = _detect_orphans(txns)
+
+    def _orphan_key(t) -> tuple:
+        return (t["currency"], round(abs(float(t["amount"])), 2), str(t.get("txn_id", "")))
+
     orphan_keys = {(i.currency, round(abs(i.amount), 2), i.txn_id) for i in issues}
     # Keep single-leg liability settlements promoted by promote_internal_transfers:
     # they have no partner leg by design, so they would otherwise look orphaned.
     for t in txns:
         if _is_liability_settlement(t, own_liability_digits):
-            orphan_keys.discard(
-                (t["currency"], round(abs(float(t["amount"])), 2), str(t.get("txn_id", "")))
-            )
+            orphan_keys.discard(_orphan_key(t))
+    # Keep single-leg investment transfers flagged by detect_investment_transfers:
+    # they have no partner leg by design, so they would otherwise look orphaned.
     for t in txns:
-        key = (t["currency"], round(abs(float(t["amount"])), 2), str(t.get("txn_id", "")))
-        if key in orphan_keys:
+        if "investment_transfer" in (t.get("link_labels", []) or []):
+            orphan_keys.discard(_orphan_key(t))
+    for t in txns:
+        if _orphan_key(t) in orphan_keys:
             t["is_internal_transfer"] = False
     currencies = sorted({t["currency"] for t in txns if t.get("is_internal_transfer")})
     return IrVerificationReport(
         internal_transfer_issues=issues,
         currencies_checked=currencies,
     )
-
 
 def _self_reference_accounts(description: str, own_digits: set[str]) -> set[str]:
     """Return the set of the user's own account numbers (digit-only) that appear
@@ -452,7 +461,10 @@ def verify_txn_links(statement: ParsedStatement) -> ParsedStatement:
             # Orphan detection — internal transfers must have linked twins.
             # NOT covered by symmetry below because orphans have no links to
             # iterate over.
-            if txn.is_internal_transfer and not txn.linked_txn_ids:
+            # Single-leg investment transfers (label "investment_transfer") are
+            # allowed without a twin, so don't warn about a missing link.
+            if (txn.is_internal_transfer and not txn.linked_txn_ids
+                    and "investment_transfer" not in txn.link_labels):
                 warn = (
                     f"transfer without linked twin: txn {txn.txn_id!r} "
                     f"(account {acct.account_no}, {txn.posted_date}, amount "

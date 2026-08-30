@@ -28,6 +28,7 @@ from pfa_ir_consolidator.detect_transfers import (  # noqa: E402
     detect_currency_conversions,
     detect_inter_bank_transfers,
     detect_intra_bank_transfers,
+    detect_investment_transfers,
 )
 # Internal-transfer verification (promotion, link integrity, orphan reconcile)
 # now lives in pfa-ir-verifier — the canonical home for all IR verification.
@@ -418,6 +419,7 @@ def main() -> None:
     consolidated = detect_intra_bank_transfers(consolidated)
     consolidated = detect_currency_conversions(consolidated)
     consolidated = detect_cc_payments(consolidated)
+    consolidated = detect_investment_transfers(consolidated)
 
     from pfa_parser.postprocess import verify_txn_links
     consolidated = verify_txn_links(consolidated)

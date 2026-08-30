@@ -13,6 +13,13 @@ pairs where money moved between accounts:
   * **CC Payment**: credit card payments from a current account to a credit
     card at the *same* institution (e.g. Current Account → Credit Card $500).
     Matched by absolute amount (not sum, since both sides can be negative).
+  * **Investment Transfer**: a transfer from an asset account into one of the
+    user's own investment accounts (SRS / Unit Trust / Fixed Deposit). Matched
+    by (posted_date + equal magnitude + the asset leg referencing the investment
+    account number). Unlike every other internal transfer, it is allowed as a
+    *single* leg — the investment account may not record its principal in the
+    consolidated IR, so requiring a twin would wrongly leave the source debit as
+    an expense.
 
 These are internal transfers that should be flagged to avoid double-counting in
 net-worth calculations.
@@ -49,6 +56,7 @@ from pfa_ir_schema.relations import (
     REL_CURRENCY_CONVERSION,
     REL_INTER_BANK,
     REL_INTRA_BANK,
+    REL_INVESTMENT_TRANSFER,
 )
 
 # Keywords that mark a transaction as a genuine transfer (as opposed to an
@@ -66,6 +74,12 @@ _TRANSFER_KEYWORD_RE = re.compile(
 def _is_transfer_like(description: str) -> bool:
     """Return True if the description looks like a transfer between accounts."""
     return bool(_TRANSFER_KEYWORD_RE.search(description or ""))
+
+
+# Account types treated as the user's own investment accounts. A transfer from
+# an asset account into one of these is an internal transfer (money moved between
+# the holder's own accounts), not new spending.
+_INVESTMENT_ACCOUNT_TYPES = frozenset({"srs", "unit_trust", "fixed_deposit"})
 
 
 def detect_inter_bank_transfers(statement: Any) -> Any:
@@ -565,6 +579,129 @@ def detect_cc_payments(statement: Any) -> Any:
     cons = dict(extras.get("consolidation", {}) or {})
     transfers_extras = dict(cons.get("transfers", {}) or {})
     transfers_extras["cc_payments_detected"] = matched_pairs
+    cons["transfers"] = transfers_extras
+    extras["consolidation"] = cons
+    statement.extras = extras
+
+    return statement
+
+
+def detect_investment_transfers(statement: Any) -> Any:
+    """Detect transfers from an asset account into one of the user's own
+    investment accounts (SRS / Unit Trust / Fixed Deposit) and tag them internal.
+
+    Mirrors the other transfer passes but, unlike them, a transfer into an own
+    investment account is permitted as a *single* leg. The investment account may
+    not record its principal (e.g. only the source bank side is in the
+    consolidated IR), so requiring an opposite-sign twin would wrongly leave the
+    source debit classified as an expense. This is the one exception to the
+    strict two-leg internal-transfer reconciliation; every other internal
+    transfer keeps the two-leg rule (see ``pfa-ir-verifier``).
+
+    Two cases are handled:
+
+    * **Both legs present** — an asset-account leg (current/savings/ewallet) and
+      an investment-account leg on the same ``posted_date`` with equal magnitude,
+      where the asset leg's description references the investment account number.
+      Both legs are cross-linked and flagged ``is_internal_transfer`` (label
+      ``"investment_transfer"``).
+    * **Single leg (source only)** — an asset-account leg whose description
+      references one of the user's own investment account numbers but with no
+      matching investment leg in the IR. It is flagged ``is_internal_transfer``
+      (label ``"investment_transfer"``) without a link, so it is excluded from
+      expenses yet not flagged as an orphan.
+
+    Mutates and returns *statement*. Idempotent (skips already-linked txns).
+    """
+    # Match account numbers by their digit-only form so that formatted numbers
+    # (e.g. "123-456-789-0") and bare digits in a description ("1234567890")
+    # refer to the same account. The asset-leg description carries only the raw digits.
+    inv_nos: set[str] = set()
+    for acct in statement.accounts:
+        if (acct.account_type or "").lower() in _INVESTMENT_ACCOUNT_TYPES:
+            digits = re.sub(r"\D", "", acct.account_no or "")
+            if digits:
+                inv_nos.add(digits)
+    if not inv_nos:
+        return statement
+
+    # Index candidate legs by posted_date. Investment legs come from investment
+    # accounts; asset legs from everything else (current/savings/ewallet/...).
+    inv_by_date: dict[str, list[tuple[Any, Any]]] = {}
+    asset_by_date: dict[str, list[tuple[Any, Any]]] = {}
+    for acct in statement.accounts:
+        at = (acct.account_type or "").lower()
+        for txn in (acct.transactions or []):
+            if not txn.posted_date or txn.is_internal_transfer:
+                continue
+            if at in _INVESTMENT_ACCOUNT_TYPES:
+                inv_by_date.setdefault(txn.posted_date, []).append((txn, acct))
+            else:
+                asset_by_date.setdefault(txn.posted_date, []).append((txn, acct))
+
+    matched = 0
+    for date, inv_legs in inv_by_date.items():
+        asset_legs = asset_by_date.get(date, [])
+        if not asset_legs:
+            continue
+        used_inv: set[int] = set()
+        used_asset: set[int] = set()
+        for ki, (inv_txn, inv_acct) in enumerate(inv_legs):
+            if ki in used_inv:
+                continue
+            inv_no = re.sub(r"\D", "", inv_acct.account_no or "")
+            for ma, (asset_txn, asset_acct) in enumerate(asset_legs):
+                if ma in used_asset:
+                    continue
+                if asset_acct.account_no == inv_acct.account_no:
+                    continue
+                if abs(abs(inv_txn.amount) - abs(asset_txn.amount)) > 1e-2:
+                    continue
+                # The asset leg must reference the investment account number — a
+                # precise signal that avoids linking unrelated same-day charges.
+                if inv_no not in re.findall(r"\d+", asset_txn.description or ""):
+                    continue
+                used_inv.add(ki)
+                used_asset.add(ma)
+                _cross_link(inv_txn, asset_txn, labels=(REL_INVESTMENT_TRANSFER,))
+                matched += 1
+                warn = (
+                    f"Investment transfer detected: (asset {asset_acct.account_no}) → "
+                    f"(investment {inv_acct.account_no}, {inv_acct.account_type}), "
+                    f"amount {abs(asset_txn.amount):,.2f}, date {date}"
+                )
+                if warn not in statement.warnings:
+                    statement.warnings.append(warn)
+                break
+
+    # Single-leg: asset legs referencing an own investment account number but
+    # with no matched investment leg. Flag them internal without a link.
+    matched_single = 0
+    for asset_legs in asset_by_date.values():
+        for asset_txn, asset_acct in asset_legs:
+            if asset_txn.is_internal_transfer:
+                continue
+            refs = set(re.findall(r"\d+", asset_txn.description or ""))
+            if not (refs & inv_nos):
+                continue
+            asset_txn.is_internal_transfer = True
+            if REL_INVESTMENT_TRANSFER not in asset_txn.link_labels:
+                asset_txn.link_labels = list(asset_txn.link_labels) + [REL_INVESTMENT_TRANSFER]
+            matched_single += 1
+            warn = (
+                f"Investment transfer (single-leg) detected: (asset "
+                f"{asset_acct.account_no}) → own investment account, "
+                f"amount {abs(asset_txn.amount):,.2f}, date {asset_txn.posted_date}"
+            )
+            if warn not in statement.warnings:
+                statement.warnings.append(warn)
+
+    # Record detection stats in extras.
+    extras = dict(statement.extras or {})
+    cons = dict(extras.get("consolidation", {}) or {})
+    transfers_extras = dict(cons.get("transfers", {}) or {})
+    transfers_extras["investment_detected"] = matched
+    transfers_extras["investment_single_leg_detected"] = matched_single
     cons["transfers"] = transfers_extras
     extras["consolidation"] = cons
     statement.extras = extras

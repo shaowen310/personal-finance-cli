@@ -8,6 +8,7 @@ from .detect_transfers import (
     detect_currency_conversions,
     detect_inter_bank_transfers,
     detect_intra_bank_transfers,
+    detect_investment_transfers,
 )
 
 __all__ = [
@@ -18,4 +19,5 @@ __all__ = [
     "detect_intra_bank_transfers",
     "detect_currency_conversions",
     "detect_cc_payments",
+    "detect_investment_transfers",
 ]
