@@ -172,6 +172,22 @@ def _own_account_digits(accounts: list[dict[str, Any]]) -> set[str]:
     return digits
 
 
+def _own_liability_digits(accounts: list[dict[str, Any]]) -> set[str]:
+    """Digits-only forms of the user's own *liability* account numbers (credit cards).
+
+    A payment from an asset account to one of these is a balance-sheet settlement
+    (asset -> own liability), not new spending, and is treated as an internal
+    transfer. See ``promote_internal_transfers`` / ``_is_liability_settlement``.
+    """
+    digits: set[str] = set()
+    for acct in accounts:
+        if str(acct.get("account_type", "")).lower() in _LIABILITY_ACCOUNT_TYPES:
+            no = "".join(ch for ch in str(acct.get("account_no", "")) if ch.isdigit())
+            if len(no) >= 4:
+                digits.add(no)
+    return digits
+
+
 def _load_consolidated_ir(data: dict[str, Any], path: Path,
                           start_date: str | None = None,
                           end_date: str | None = None) -> tuple[dict[str, Any], list[Txn]]:
@@ -182,6 +198,7 @@ def _load_consolidated_ir(data: dict[str, Any], path: Path,
     """
     meta = _build_meta(data, path)
     own_digits = _own_account_digits(data.get("accounts", []))
+    own_liability_digits = _own_liability_digits(data.get("accounts", []))
     txns: list[Txn] = []
     for acct in data.get("accounts", []):
         acct_ccy = acct.get("currency", "")
@@ -216,7 +233,8 @@ def _load_consolidated_ir(data: dict[str, Any], path: Path,
             })
     # Promote candidate self-reference rows only when a valid partner leg exists.
     promote_internal_transfers(txns, own_digits, amount_key="amount",
-                                desc_key="description", flag_key="is_internal_transfer")
+                                desc_key="description", flag_key="is_internal_transfer",
+                                own_liability_digits=own_liability_digits)
     return meta, txns
 
 
@@ -695,7 +713,7 @@ def _analyze_consolidated(raw: dict[str, Any], meta: dict[str, Any],
     ``start_date``/``end_date``), account-summary balances are ignored and
     opening/closing are derived from the filtered transaction stream instead.
     """
-    demote_orphan_internal_transfers(txns)
+    demote_orphan_internal_transfers(txns, own_liability_digits=_own_liability_digits(raw.get("accounts", [])))
     by_ccy: dict[str, list[Txn]] = defaultdict(list)
     for t in txns:
         by_ccy[t["currency"]].append(t)
@@ -767,7 +785,7 @@ def analyze_statement(raw: dict[str, Any], meta: dict[str, Any],
     ``start_date``/``end_date``), statement-meta balances are ignored and
     opening/closing are derived from the filtered transaction stream instead.
     """
-    demote_orphan_internal_transfers(txns)
+    demote_orphan_internal_transfers(txns, own_liability_digits=_own_liability_digits(raw.get("accounts", [])))
     by_ccy: dict[str, list[Txn]] = defaultdict(list)
     for t in txns:
         by_ccy[t["currency"]].append(t)
@@ -1360,6 +1378,7 @@ def _load_ir_with_txn_id(path: Path,
     if "accounts" in data:
         rows = []
         own_digits = _own_account_digits(data.get("accounts", []))
+        own_liability_digits = _own_liability_digits(data.get("accounts", []))
         for acct in data.get("accounts", []):
             inst = acct.get("institution", "")
             acct_no = acct.get("account_no", "")
@@ -1395,7 +1414,8 @@ def _load_ir_with_txn_id(path: Path,
                 })
         # Promote candidate self-reference rows only when a valid partner leg exists.
         promote_internal_transfers(rows, own_digits, amount_key="amount",
-                                    desc_key="description", flag_key="is_internal_transfer")
+                                    desc_key="description", flag_key="is_internal_transfer",
+                                    own_liability_digits=own_liability_digits)
         if not keep_internal:
             rows = [r for r in rows if not r["is_internal_transfer"]]
         return meta, rows

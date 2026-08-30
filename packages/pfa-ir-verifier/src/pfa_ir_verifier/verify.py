@@ -144,15 +144,22 @@ class IrVerificationReport:
 
 
 def _detect_orphans(txns: list[Txn]) -> list[InternalTransferIssue]:
-    """Return internal-flagged rows lacking an equal-magnitude opposite leg.
+    """Return internal-flagged rows lacking a valid twin.
 
     Internal transfers always move money between two of the holder's own
-    accounts, so for every currency the internal legs must pair up by equal
-    magnitude and net to zero. A row whose magnitude has an odd count within
-    its currency is an orphan (it has no twin). Pairing by magnitude parity is
-    independent of cash-flow direction, so it is robust to a row being
-    mis-classified as In vs Out.
+    accounts, so for every currency the internal legs must pair up. A row is an
+    orphan when it has no twin, detected in either of two ways:
+
+    * *Magnitude parity* -- within a currency the legs must pair by equal
+      magnitude and net to zero; a magnitude with an odd count has an unpaired
+      leg. Independent of cash-flow direction (robust to In/Out mis-class).
+    * *Existing links* -- a flagged row whose ``linked_txn_ids`` references a
+      *present* transaction is already a validated pair (e.g. a credit-card bill
+      payment whose bank and card legs are linked but stored with the same sign,
+      so magnitude parity alone would wrongly flag one side). Not an orphan even
+      if only one side is flagged as internal.
     """
+    present_ids = {str(t.get("txn_id", "")) for t in txns}
     by_ccy: dict[str, list[Txn]] = {}
     for t in txns:
         if t.get("is_internal_transfer"):
@@ -164,8 +171,15 @@ def _detect_orphans(txns: list[Txn]) -> list[InternalTransferIssue]:
         orphan_mags = {mag for mag, n in counts.items() if n % 2 == 1}
         if not orphan_mags:
             continue
+        # Rows already linked to a present partner are valid pairs, even if only
+        # one side is flagged (orphan detection would otherwise see a single leg).
+        linked_pairs = {
+            str(t.get("txn_id", ""))
+            for t in rows
+            if any(str(p) in present_ids for p in (t.get("linked_txn_ids", []) or []))
+        }
         for t in rows:
-            if round(abs(float(t["amount"])), 2) in orphan_mags:
+            if round(abs(float(t["amount"])), 2) in orphan_mags and str(t.get("txn_id", "")) not in linked_pairs:
                 issues.append(
                     InternalTransferIssue(
                         currency=ccy,
@@ -193,8 +207,47 @@ def find_internal_transfer_orphans(
     )
 
 
+# Account types treated as liabilities (a payment to one of these own accounts is
+# a balance-sheet settlement, not new spending). Kept in sync with
+# ``pfa-analysis``'s ``_LIABILITY_ACCOUNT_TYPES``.
+_LIABILITY_ACCOUNT_TYPES = frozenset({"credit_card", "credit", "card"})
+
+
+def _acct_digit_runs(description: str) -> set[str]:
+    """Contiguous digit runs of length >= 4 (candidate own-account references)."""
+    if not description:
+        return set()
+    return {r for r in re.findall(r"\d+", str(description)) if len(r) >= 4}
+
+
+def _is_liability_settlement(row: dict[str, Any],
+                             own_liability_digits: set[str] | None) -> bool:
+    """True when *row* is a payment from an asset account to one of the user's own
+    liability accounts (e.g. a credit-card bill payment).
+
+    Such a move is an asset<->own-liability settlement, not new spending: the
+    underlying expense was already captured when the liability was incurred (the
+    card charge). It is therefore an internal transfer and must be excluded from
+    operating cash flow. The rule fires *without* a partner leg — the common case
+    where only the bank side of the payment is present in the IR — unlike
+    self-reference pairing which requires both legs. To avoid mis-flagging a
+    card's own charge (a debit on the liability account itself), the row's own
+    account type must NOT be a liability.
+    """
+    if not own_liability_digits:
+        return False
+    at = str(row.get("account_type", "")).lower()
+    if at in _LIABILITY_ACCOUNT_TYPES:
+        return False
+    amt = float(row.get("amount", 0.0))
+    if amt >= 0:  # non-liability accounts: a debit is negative
+        return False
+    return bool(own_liability_digits & _acct_digit_runs(row.get("description", "")))
+
+
 def demote_orphan_internal_transfers(
     ir: ParsedStatement | dict[str, Any] | list[Any],
+    own_liability_digits: set[str] | None = None,
 ) -> IrVerificationReport:
     """Fixer: demote orphan internal-flagged rows in place.
 
@@ -208,6 +261,13 @@ def demote_orphan_internal_transfers(
     txns = _iter_txns(ir)
     issues = _detect_orphans(txns)
     orphan_keys = {(i.currency, round(abs(i.amount), 2), i.txn_id) for i in issues}
+    # Keep single-leg liability settlements promoted by promote_internal_transfers:
+    # they have no partner leg by design, so they would otherwise look orphaned.
+    for t in txns:
+        if _is_liability_settlement(t, own_liability_digits):
+            orphan_keys.discard(
+                (t["currency"], round(abs(float(t["amount"])), 2), str(t.get("txn_id", "")))
+            )
     for t in txns:
         key = (t["currency"], round(abs(float(t["amount"])), 2), str(t.get("txn_id", "")))
         if key in orphan_keys:
@@ -249,6 +309,7 @@ def promote_internal_transfers(
     links_key: str = "linked_txn_ids",
     labels_key: str = "link_labels",
     tol: float = 0.01,
+    own_liability_digits: set[str] | None = None,
 ) -> None:
     """Finalize ``is_internal_transfer`` for candidate self-reference rows.
 
@@ -332,6 +393,29 @@ def promote_internal_transfers(
                 partner[links_key] = list(partner[links_key]) + [id_i]
             if "self_reference" not in partner.setdefault(labels_key, []):
                 partner[labels_key] = list(partner[labels_key]) + ["self_reference"]
+
+    # Asset -> own-liability settlements (e.g. credit-card bill payments). These
+    # are internal transfers even without a partner leg: the spend was already an
+    # expense at charge time, so the payment must be excluded from operating cash
+    # flow. demote_orphan_internal_transfers honours the same rule and will not
+    # strip these single-leg promotions (they have no twin by design).
+    if own_liability_digits:
+        id_index = {str(r.get(txn_id_key, "")): r for r in rows}
+        for r in rows:
+            if r.get(flag_key):
+                continue
+            if _is_liability_settlement(r, own_liability_digits):
+                r[flag_key] = True
+                # Flag any linked partner so both legs are internal transfers.
+                # Otherwise the partner (e.g. the card's credit leg) stays
+                # unflagged, gets mis-classified as income/expense downstream, and
+                # the promoted leg would look like a single-leg orphan. When the
+                # partner is absent (only one leg in the IR) the demote guard on
+                # _is_liability_settlement still protects the promoted leg.
+                for pid in (r.get(links_key, []) or []):
+                    partner = id_index.get(str(pid))
+                    if partner is not None and not partner.get(flag_key):
+                        partner[flag_key] = True
 
 
 def verify_txn_links(statement: ParsedStatement) -> ParsedStatement:
