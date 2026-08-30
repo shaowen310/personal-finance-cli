@@ -498,6 +498,10 @@ def main() -> None:
         help="FX provider name (pluggable). Default: frankfurter.",
     )
     _ = ap.add_argument(
+        "--fx-force-refresh", action="store_true",
+        help="Ignore the cache and re-fetch live FX rates.",
+    )
+    _ = ap.add_argument(
         "--fx-no-embed", action="store_true",
         help="Do not embed FX provenance into extras.consolidation.fx of the IR.",
     )
@@ -518,6 +522,7 @@ def main() -> None:
         currencies,
         as_of=as_of,
         provider=get_provider(args.fx_provider),
+        force_refresh=args.fx_force_refresh,
     )
 
     import pfa_ir_schema.common as ir_common

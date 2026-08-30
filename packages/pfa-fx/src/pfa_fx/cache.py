@@ -4,14 +4,12 @@ from __future__ import annotations
 
 import json
 import os
-import time
 from pathlib import Path
 from typing import Any
 
 from .defaults import DEFAULT_CACHE_DIR
 
 CACHE_FILENAME = "fx_cache.json"
-CACHE_TTL_SECONDS = 24 * 3600  # 1 day
 
 
 def _cache_path() -> Path:
@@ -41,15 +39,15 @@ def save_cache(cache: dict[str, Any]) -> None:
 
 
 def cache_get(provider: str, key: str) -> dict[str, Any] | None:
-    """Return a cached entry if present and not expired, else None."""
+    """Return a cached entry if present, else None.
+
+    Historical FX rates never change, so cached entries are treated as
+    permanently valid (no TTL / expiry).
+    """
     cache = load_cache()
     bucket = cache.get("entries", {}).get(provider, {})
     entry = bucket.get(key)
-    if not isinstance(entry, dict):
-        return None
-    if time.time() - float(entry.get("fetched_at", 0)) > CACHE_TTL_SECONDS:
-        return None
-    return entry
+    return entry if isinstance(entry, dict) else None
 
 
 def cache_put(provider: str, key: str, entry: dict[str, Any]) -> None:

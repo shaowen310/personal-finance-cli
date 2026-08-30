@@ -5,15 +5,17 @@ Canonical shape: **SGD per 1 unit of foreign currency** (``"SGD": 1.0``).
 
 from __future__ import annotations
 
+import json
+import logging
 import os
 from dataclasses import dataclass, field
 from typing import Any
 
-import json
-
 from .cache import cache_get, cache_put
 from .defaults import BASE_CCY, DEFAULT_FX_RATES
 from .providers import get_provider
+
+_LOGGER = logging.getLogger(__name__)
 
 # Working copy of the fallback rates; may be augmented by PFA_FX_FALLBACK.
 _fallback_rates: dict[str, float] = dict(DEFAULT_FX_RATES)
@@ -62,8 +64,8 @@ def collect_currencies(stmt: Any) -> list[str]:
         if accounts is not None:
             for acc in accounts:
                 add(acc)
-    except Exception:  # noqa: BLE001 - never let FX break statement collection
-        pass
+    except (TypeError, AttributeError) as exc:  # never let FX break statement collection
+        _LOGGER.warning("collect_currencies: skipped FX currency collection: %s", exc)
     return sorted(currencies)
 
 
@@ -92,13 +94,17 @@ def get_fx_rates(
     currencies: list[str],
     as_of: str | None = None,
     provider: Any | None = None,
+    force_refresh: bool = False,
 ) -> FXResult:
     """Get FX rates (SGD per 1 unit) for *currencies*, as of *as_of*.
 
     Resolution order per currency:
-      1. cached fetch (if fresh)
-      2. live fetch via provider (if ``PFA_FX_FETCH != 0``)
+      1. cached fetch (permanent; historical rates never change)
+      2. live fetch via provider (if ``PFA_FX_FETCH != 0``), unless *force_refresh*
       3. hardcoded :data:`_fallback_rates` fallback
+
+    Cached entries are treated as permanently valid (no TTL). Pass
+    *force_refresh* to ignore the cache and re-fetch live rates.
 
     Returns an :class:`FXResult`. ``missing`` lists currencies that had to fall
     back to the hardcoded default.
@@ -127,8 +133,20 @@ def get_fx_rates(
                 for ccy, val in norm.items():
                     if ccy == BASE_CCY:
                         rates[ccy] = 1.0
-                    else:
-                        rates[ccy] = val
+                        continue
+                    rates[ccy] = val
+                    # Persist each fetched currency so a later call that requests
+                    # only a subset can serve it from cache without re-fetching.
+                    cache_put(
+                        prov_name,
+                        f"{as_of or 'latest'}:{ccy}",
+                        {
+                            "rate": val,
+                            "source": source,
+                            "as_of": str(fetched.get("date") or as_of or ""),
+                            "fetched_at": fetched_at,
+                        },
+                    )
                 missing = [c for c in rates if c != BASE_CCY and c not in _fallback_rates]
                 return FXResult(
                     rates=rates, source=source or "frankfurter",
@@ -149,7 +167,11 @@ def get_fx_rates(
             rates[ccy] = 1.0
             continue
         cache_key = f"{as_of or 'latest'}:{ccy}"
-        entry = cache_get(prov_name, cache_key) if ALLOW_FETCH else None
+        entry = (
+            cache_get(prov_name, cache_key)
+            if (ALLOW_FETCH and not force_refresh)
+            else None
+        )
         if entry is None and ALLOW_FETCH:
             fetched = prov.fetch([ccy], as_of=as_of) if hasattr(prov, "fetch") else None  # type: ignore[union-attr]
             if fetched and isinstance(fetched.get("rates"), dict):
