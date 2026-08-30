@@ -32,8 +32,8 @@ from pfa_analysis.txn_ir import parse_ir
 # (analyze.py) reference these so the "uncategorized" label stays consistent
 # across the pipeline.
 UNCATEGORIZED = "Uncategorized"
-EXPENSE_UNCATEGORIZED = f"Expense:{UNCATEGORIZED}"
-INCOME_UNCATEGORIZED = f"Income:{UNCATEGORIZED}"
+EXPENSE_UNCATEGORIZED = f"Expense: {UNCATEGORIZED}"
+INCOME_UNCATEGORIZED = f"Income: {UNCATEGORIZED}"
 
 
 @dataclass

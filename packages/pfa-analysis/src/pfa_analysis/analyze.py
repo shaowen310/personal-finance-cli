@@ -706,7 +706,7 @@ def _analyze_consolidated(raw: dict[str, Any], meta: dict[str, Any],
 # Report rendering — delegated to render_md.py
 # ---------------------------------------------------------------------------
 
-from pfa_analysis.categorize import UNCATEGORIZED  # noqa: E402
+from pfa_analysis.categorize import UNCATEGORIZED, _split_cat  # noqa: E402
 from pfa_analysis.render_md import render_report, fmt  # noqa: E402
 
 # Per-file processing helper
@@ -1185,17 +1185,6 @@ _LIABILITY_ACCOUNT_TYPES = {"credit_card"}
 def _classify_discretionary(category: str) -> bool:
     """Return True if the category is discretionary spending."""
     return _DISCRETIONARY_MAP.get(category, True)
-
-
-def _split_cat(cat: str) -> tuple[str, str]:
-    """Split a ``"Class:Subtype"`` or ``"Class: Subtype"`` string into ``(cls, sub)``."""
-    if ": " in cat:
-        parts = cat.split(": ", 1)
-    elif ":" in cat:
-        parts = cat.split(":", 1)
-    else:
-        return ("", cat)
-    return (parts[0], parts[1])
 
 
 def _build_meta(data: dict[str, Any], path: Path) -> dict[str, Any]:
