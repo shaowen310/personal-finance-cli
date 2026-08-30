@@ -283,6 +283,7 @@ rules:
       - FAST PAYMENT
       - PAYNOW-FAST
       - PAYNOW TRANSFER
+      - PAYNOW TO
       - CURRENCY CONVERSION
       - TOP-UP TO PAYLAH
 

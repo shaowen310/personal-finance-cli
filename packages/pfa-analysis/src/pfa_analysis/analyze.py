@@ -298,9 +298,19 @@ def _income_contrib(amount: float, account_type: str) -> float:
     return amount if at not in _CREDIT_LIKE_ACCOUNTS else -amount
 
 
-def classify_cash_flow(txn: Txn) -> str:
-    """Return one of Income / Expense / Transfer In / Transfer Out."""
-    if txn.get("is_internal_transfer"):
+def classify_cash_flow(txn: Txn, category: str | None = None) -> str:
+    """Return one of Income / Expense / Transfer In / Transfer Out.
+
+    A row is a transfer when either:
+      * ``is_internal_transfer`` is set (internal move between own accounts), or
+      * its resolved ``category`` starts with ``"Transfer:"`` (e.g. the
+        ``Transfer: External`` produced by categorize.py for a PayNow transfer
+        to a person). Honouring the category — rather than a bare keyword — keeps
+        merchant PayNow (e.g. ``PAYNOW TO SWEE HENG``, categorised as Dining)
+        correctly out of the transfer bucket while still promoting person-to-
+        person PayNow to Transfer Out.
+    """
+    if txn.get("is_internal_transfer") or (category or "").startswith("Transfer:"):
         return "Transfer Out" if _is_debit(txn) else "Transfer In"
     u = txn["description"].upper()
     if any(k in u for k in TRANSFER_KEYWORDS):
@@ -346,7 +356,8 @@ def parse_date_to_iso(s: Any) -> str | None:
 def compute_metrics(txns: list[Txn], meta: dict[str, Any], ccy: str,
                     opening_override: float | None = None,
                     closing_override: float | None = None,
-                    use_txn_balances: bool = False) -> dict[str, Any]:
+                    use_txn_balances: bool = False,
+                    txn_categories: dict[str, str] | None = None) -> dict[str, Any]:
     """Compute balance-sheet + cash-flow metrics for one currency in a statement.
 
     When ``opening_override``/``closing_override`` are supplied (e.g. derived
@@ -359,12 +370,20 @@ def compute_metrics(txns: list[Txn], meta: dict[str, Any], ccy: str,
     transactions have been filtered by ``start_date``/``end_date``, because
     the statement-level balances reflect the full period rather than the
     truncated window.
+
+    ``txn_categories`` optionally maps ``txn_id`` -> category (e.g. the
+    ``Transfer: External`` produced by categorize.py). When supplied, a row whose
+    category starts with ``"Transfer:"`` is counted as a transfer even though its
+    description may not contain a transfer keyword (e.g. a PayNow transfer to a
+    person). Rows without a category fall back to keyword/``is_internal_transfer``
+    detection.
     """
     income = expense = transfer_in = transfer_out = 0.0
     transfer_in_int = transfer_in_ext = 0.0
     transfer_out_int = transfer_out_ext = 0.0
     for t in txns:
-        c = classify_cash_flow(t)
+        cat = (txn_categories or {}).get(t.get("txn_id", "")) if txn_categories is not None else None
+        c = classify_cash_flow(t, cat)
         # Outflows (expense / transfer-out) are debits; inflows (income /
         # transfer-in) are credits. The signed contribution depends on the
         # account side (asset vs liability), per _expense_contrib / _income_contrib.
@@ -618,7 +637,8 @@ def build_balance_sheet_drilldown(raw: dict[str, Any],
 
 def _analyze_file(path: Path,
                   start_date: str | None = None,
-                  end_date: str | None = None) -> dict[str, Any]:
+                  end_date: str | None = None,
+                  txn_categories: dict[str, str] | None = None) -> dict[str, Any]:
     """Analyze one statement file into a structured result.
 
     Dispatches to the consolidated analysis path (account-balance based) when
@@ -628,20 +648,27 @@ def _analyze_file(path: Path,
     derived from the filtered transaction stream (``balance_after``) rather
     than from the full-period statement/account balances, ensuring Cash Flow
     reconciliation holds for the truncated window.
+
+    ``txn_categories`` optionally maps ``txn_id`` -> category and is forwarded to
+    the metrics computation so transfer categories (e.g. PayNow to a person) are
+    honoured.
     """
     raw = json.loads(Path(path).read_text(encoding="utf-8"))
     meta, txns = load_statement(path, start_date, end_date)
     use_txn_balances = bool(start_date or end_date)
     if meta.get("_consolidated"):
         return _analyze_consolidated(raw, meta, txns, path,
-                                     use_txn_balances=use_txn_balances)
+                                     use_txn_balances=use_txn_balances,
+                                     txn_categories=txn_categories)
     return analyze_statement(raw, meta, txns, path,
-                             use_txn_balances=use_txn_balances)
+                             use_txn_balances=use_txn_balances,
+                             txn_categories=txn_categories)
 
 
 def _analyze_consolidated(raw: dict[str, Any], meta: dict[str, Any],
                           txns: list[Txn], path: Path,
-                          use_txn_balances: bool = False) -> dict[str, Any]:
+                          use_txn_balances: bool = False,
+                          txn_categories: dict[str, str] | None = None) -> dict[str, Any]:
     """Consolidated IR: opening/closing come from account balances, not txns.
 
     When ``use_txn_balances`` is True (e.g. transactions have been filtered by
@@ -697,6 +724,7 @@ def _analyze_consolidated(raw: dict[str, Any], meta: dict[str, Any],
             opening_override=op if (op is not None and cl is not None) else None,
             closing_override=cl if (op is not None and cl is not None) else None,
             use_txn_balances=use_txn_balances,
+            txn_categories=txn_categories,
         )
 
     assets = build_assets(meta, metrics_by_ccy, cc_balances=cc_balances)
@@ -711,7 +739,8 @@ def _analyze_consolidated(raw: dict[str, Any], meta: dict[str, Any],
 
 def analyze_statement(raw: dict[str, Any], meta: dict[str, Any],
                       txns: list[Txn], path: Path,
-                      use_txn_balances: bool = False) -> dict[str, Any]:
+                      use_txn_balances: bool = False,
+                      txn_categories: dict[str, str] | None = None) -> dict[str, Any]:
     """Per-file IR: metrics inferred from statement_meta / transaction flow.
 
     When ``use_txn_balances`` is True (e.g. transactions have been filtered by
@@ -728,7 +757,8 @@ def analyze_statement(raw: dict[str, Any], meta: dict[str, Any],
     metrics_by_ccy: dict[str, dict[str, Any]] = {}
     for ccy, lst in by_ccy.items():
         metrics_by_ccy[ccy] = compute_metrics(lst, meta, ccy,
-                                              use_txn_balances=use_txn_balances)
+                                              use_txn_balances=use_txn_balances,
+                                              txn_categories=txn_categories)
 
     cc_balances: dict[str, float] = {}
     cc_txns = sorted(
@@ -850,8 +880,40 @@ def build_income_expense_drilldowns(
                 "account_type": str(row.get("account_type", "")),
             })
         elif cat_cls == "Transfer":
-            # Transfers (internal and external) are excluded from income/expense.
-            continue
+            # Internal transfers are own-account moves with no net effect, so they
+            # stay excluded from income/expense. External transfers (e.g. PayNow to
+            # a person, FAST to another bank) are real inflows/outflows and are
+            # surfaced in the breakdowns: Transfer In (External) under income,
+            # Transfer Out (External) under expense.
+            if cat_sub != "External":
+                continue
+            flow = classify_cash_flow(row, cat_full)
+            if flow == "Transfer In":
+                src = "Transfer In (External)"
+                amt_inc = _income_contrib(float(row["amount"]), row.get("account_type", ""))
+                src_ccy[src][row["currency"]] += amt_inc
+                src_txns[src].append({
+                    "date": str(row.get("date", "")),
+                    "description": str(row.get("description", "")),
+                    "amount": amt_inc,
+                    "currency": str(row.get("currency", "")),
+                    "bank": str(row.get("bank", "")),
+                    "account": str(row.get("account", "")),
+                    "account_type": str(row.get("account_type", "")),
+                })
+            elif flow == "Transfer Out":
+                cat_disp = "Transfer Out (External)"
+                amt = _expense_contrib(float(row["amount"]), row.get("account_type", ""))
+                exp_ccy[cat_disp][row["currency"]] += amt
+                exp_txns[cat_disp].append({
+                    "date": str(row.get("date", "")),
+                    "description": str(row.get("description", "")),
+                    "amount": amt,
+                    "currency": str(row.get("currency", "")),
+                    "bank": str(row.get("bank", "")),
+                    "account": str(row.get("account", "")),
+                    "account_type": str(row.get("account_type", "")),
+                })
         else:
             # Fallback: transaction not yet categorized — use cash-flow
             # classification to assign to income or expense.

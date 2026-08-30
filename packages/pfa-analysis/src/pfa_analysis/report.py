@@ -88,7 +88,15 @@ def render_consolidated_report(
     Callers (the CLI ``main``, batch test drivers) should use this instead of
     re-implementing the assembly logic.
     """
-    result = _analyze_file(consolidated_path, start_date, end_date)
+    # Load the transaction-category map (if present) so cash-flow metrics can
+    # honour "Transfer:*" categories (e.g. a PayNow transfer to a person) produced
+    # by txn-categorize, instead of relying on description keywords alone.
+    _cat_path = Path(categories_path) if categories_path else consolidated_path.with_name("categories.json")
+    _txn_categories: dict[str, str] = {}
+    if _cat_path.exists():
+        _txn_categories = json.loads(_cat_path.read_text(encoding="utf-8"))
+    result = _analyze_file(consolidated_path, start_date, end_date,
+                           txn_categories=_txn_categories or None)
     # FX rate selection:
     #  - When a cut-off window is supplied, value FX as of the cut-off end date
     #    ("as of 0731" uses the 0731 rate, not the IR's build-date snapshot).

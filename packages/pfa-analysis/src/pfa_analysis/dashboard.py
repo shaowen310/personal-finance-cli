@@ -60,7 +60,7 @@ def build_dashboard_json(
     for p in ir_paths:
         meta_raw, ir_rows = _load_ir_with_txn_id(p)
         # Build the same structure as analyze_file() for reuse
-        result = _analyze_file(p)
+        result = _analyze_file(p, txn_categories=categories or None)
         result["_meta_raw"] = meta_raw
         result["_rows"] = ir_rows
         all_results.append(result)
