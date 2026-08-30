@@ -13,7 +13,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-from pfa_analysis.fx_cache import fetch_fx_rates  # noqa: F401  (cached; used by build_dashboard_json)
+from pfa_fx import fetch_fx_rates  # noqa: F401  (cached; used by build_dashboard_json)
 from pfa_analysis.analyze import (
     _analyze_file,
     _classify_discretionary,

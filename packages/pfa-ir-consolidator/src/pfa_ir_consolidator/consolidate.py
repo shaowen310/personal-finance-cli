@@ -334,7 +334,7 @@ def embed_fx_rates(
     .. note::
         FX rates are **no longer embedded by default**. The analysis package
         fetches rates as of the reporting cut-off date and caches them in the
-        OS temp directory (``%TEMP%/pfa_fx_cache``), so the IR stays free of
+        on-disk cache (``pfa_fx.cache``), so the IR stays free of
         build-date snapshots that would mislead readers ("as of 2026-08-18"
         inside a July statement). This helper is kept only for callers that
         explicitly want an inline FX block (e.g. ``--embed-fx``); the default

@@ -26,7 +26,7 @@ from pfa_analysis.analyze import (
     build_transfer_drilldown,
     parse_date_to_iso,
 )
-from pfa_analysis.fx_cache import fetch_fx_rates
+from pfa_fx import fetch_fx_rates
 from pfa_analysis.dashboard import build_dashboard_json
 from pfa_analysis.render_md import render_report
 

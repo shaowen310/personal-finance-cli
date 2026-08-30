@@ -46,7 +46,7 @@ from pfa_ir_verifier import demote_orphan_internal_transfers, promote_internal_t
 from pfa_ir_schema.relations import REL_CURRENCY_CONVERSION
 
 # FX rate retrieval (cached, base = SGD). Falls back to pfa_fx defaults.
-from pfa_analysis.fx_cache import fetch_fx_rates as _fetch_fx_rates
+from pfa_fx import fetch_fx_rates as _fetch_fx_rates
 from pfa_fx import DEFAULT_FX_RATES
 
 

@@ -5,15 +5,41 @@ Some callers (``pfa-analysis`` renderers) expect an FX rate object shaped as::
     {"rates": {CCY: <SGD per 1 unit>}, "date": "...", "source": "..."}
 
 This module adapts :func:`pfa_fx.rates.get_fx_rates` to that shape so the
-analysis package needs almost no structural change.
+analysis package needs almost no structural change. The resolved wrapper dict
+is cached on disk (via :mod:`pfa_fx.cache`) keyed by date so it is reused
+offline across report runs and months.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
+from .cache import load_cache, save_cache
 from .defaults import DEFAULT_WATCH_SYMBOLS
 from .rates import FXResult, get_fx_rates
+
+# In-memory cache keyed by date string (YYYY-MM-DD) to avoid re-reading the
+# on-disk cache within a single process run.
+_WRAPPER_CACHE: dict[str, dict[str, Any]] = {}
+
+
+def _wrapper_cache_get(date_str: str) -> dict[str, Any] | None:
+    """Return a previously cached wrapper dict for *date_str*, or None.
+
+    Wrapper entries are stored without an expiry so they survive across months
+    for offline reuse (distinct from the 1-day TTL on raw provider fetches in
+    :mod:`pfa_fx.cache`).
+    """
+    cache = load_cache()
+    entry = cache.get("entries", {}).get("wrapper", {}).get(date_str)
+    return entry if isinstance(entry, dict) else None
+
+
+def _wrapper_cache_put(date_str: str, wrapper: dict[str, Any]) -> None:
+    """Persist *wrapper* under the ``wrapper`` bucket for offline reuse."""
+    cache = load_cache()
+    cache.setdefault("entries", {}).setdefault("wrapper", {})[date_str] = wrapper
+    save_cache(cache)
 
 
 def fx_result_to_wrapper(result: FXResult) -> dict[str, Any]:
@@ -32,7 +58,28 @@ def fetch_fx_rates(
     """Fetch FX rates as a renderer wrapper dict (SGD-per-unit rates).
 
     With an empty *currencies* list, all available currencies are fetched.
+
+    The resolved wrapper dict is cached in memory and on disk (via
+    :mod:`pfa_fx.cache`) keyed by *date_str* so it is reused offline across
+    report runs and months. The ``None`` ("latest") case is fetched but not
+    cached, since it has no stable key. Returns the canonical
+    ``{"rates": {CCY: SGD per 1 unit}, "date": str, "source": str}`` shape
+    (degrading to hardcoded fallback rates on failure).
     """
+    if date_str is not None:
+        cached = _WRAPPER_CACHE.get(date_str)
+        if cached is None:
+            cached = _wrapper_cache_get(date_str)
+        if cached is not None:
+            _WRAPPER_CACHE[date_str] = cached
+            return cached
+    # Network fetch via pfa_fx (raw rates are themselves cached in pfa_fx.cache,
+    # degrading to hardcoded fallback internally).
     requested = currencies if currencies is not None else DEFAULT_WATCH_SYMBOLS
     result = get_fx_rates(requested, as_of=date_str)
-    return fx_result_to_wrapper(result)
+    wrapper = fx_result_to_wrapper(result)
+    if date_str is not None:
+        # Persist for offline reuse (covers the no-network / API-down gap).
+        _wrapper_cache_put(date_str, wrapper)
+        _WRAPPER_CACHE[date_str] = wrapper
+    return wrapper
