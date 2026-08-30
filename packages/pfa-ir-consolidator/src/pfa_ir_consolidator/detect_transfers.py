@@ -58,7 +58,7 @@ from pfa_ir_schema.relations import (
     REL_INTRA_BANK,
     REL_INVESTMENT_TRANSFER,
 )
-from pfa_ir_schema import Transaction
+from pfa_ir_schema import Transaction, generate_txn_id
 
 # Keywords that mark a transaction as a genuine transfer (as opposed to an
 # ordinary spend/income that merely happens to be opposite another transaction
@@ -608,8 +608,15 @@ def _add_investment_writeoff(statement: Any, asset_txn: Any, ref_inv: set[str]) 
             break
     if target is None:
         return False
-    base_id = asset_txn.txn_id or f"inv-wf-{asset_txn.posted_date}-{abs(asset_txn.amount)}"
-    writeoff_id = f"{base_id}::investment-writeoff"
+    # Derive the synthetic id the same way normal transactions are identified
+    # (deterministic SHA-256 over posted_date/amount/currency/description), using
+    # the write-off's own field values — not a suffix on the asset leg's id.
+    writeoff_id = generate_txn_id(
+        asset_txn.posted_date,
+        -asset_txn.amount,
+        asset_txn.currency,
+        f"Investment transfer write-off (counterparty) — {asset_txn.description}",
+    )
     if any((t.txn_id or "") == writeoff_id for t in target.transactions):
         return False
     writeoff = Transaction(
