@@ -1,7 +1,7 @@
 """CLI + consolidated report rendering.
 
 Extracted from ``analyze.py`` as part of a structural split. Contains:
-  * ``demo_statements``  — synthetic data for ``--demo`` runs
+  * ``demo_ir``  — synthetic consolidated IR for ``--demo`` runs
   * ``render_consolidated_report`` — the canonical Markdown-report builder
   * ``main`` — the ``argparse`` CLI entry point
 
@@ -14,14 +14,13 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 
 from pfa_analysis.analyze import (
     _analyze_file,
     _internal_transfer_ids,
-    _split_default,
-    build_assets,
     build_fx_drilldown,
     build_income_expense_drilldowns,
     build_transfer_drilldown,
@@ -32,41 +31,63 @@ from pfa_analysis.dashboard import build_dashboard_json
 from pfa_analysis.render_md import render_report
 
 
-def demo_statements() -> list[tuple[dict[str, Any], list[Any]]]:
-    base: dict[str, Any] = {"account": {"bank": "OCBC", "account_no": "xxx", "currency": "SGD"}}
-    months = [
-        ("2026-04", [
-            ("2026-04-01", "SALARY", 5000.00),
-            ("2026-04-05", "GIANT", -120.40),
-            ("2026-04-12", "GRAB", -33.10),
-            ("2026-04-20", "TRANSFER TO DBS", -500.00),
-        ]),
-        ("2026-05", [
-            ("2026-05-01", "SALARY", 5200.00),
-            ("2026-05-04", "NTUC", -150.20),
-            ("2026-05-11", "BUS/MRT", -16.23),
-            ("2026-05-15", "TRANSFER TO DBS", -600.00),
-            ("2026-05-22", "TRANSFER FROM UOB", 300.00),
-        ]),
-    ]
-    result = []
+def demo_ir() -> dict[str, Any]:
+    """Synthetic consolidated IR (``accounts[]`` shape) used by ``--demo``.
+
+    Mirrors the real parser/consolidator output so the demo exercises the same
+    loading + analysis pipeline as a production ``.ir.json``.
+    """
     opening = 1000.0
-    for month, txns in months:
-        income = sum(a for _, _, a in txns if a > 0)
-        expense = -sum(a for _, _, a in txns if a < 0)
-        closing = opening + income - expense
-        meta = dict(base)
-        meta["period"] = {"start": f"{month}-01", "end": f"{month}-30"}
-        meta["opening"] = opening
-        meta["closing"] = closing
-        opening = closing
-        norm = [
-            {"date": d, "description": desc, "amount": amt, "currency": "SGD",
-             "is_internal_transfer": False, "balance_after": None}
-            for d, desc, amt in txns
-        ]
-        result.append((meta, norm))
-    return result
+    rows = [
+        ("2026-04-01", "SALARY", 5000.00),
+        ("2026-04-05", "GIANT", -120.40),
+        ("2026-04-12", "GRAB", -33.10),
+        ("2026-04-20", "TRANSFER TO DBS", -500.00),
+        ("2026-05-01", "SALARY", 5200.00),
+        ("2026-05-04", "NTUC", -150.20),
+        ("2026-05-11", "BUS/MRT", -16.23),
+        ("2026-05-15", "TRANSFER TO DBS", -600.00),
+        ("2026-05-22", "TRANSFER FROM UOB", 300.00),
+    ]
+    balance = opening
+    txns: list[dict[str, Any]] = []
+    for i, (d, desc, amt) in enumerate(rows):
+        balance += amt
+        txns.append({
+            "txn_id": f"demo-{i:02d}",
+            "posted_date": d,
+            "amount": amt,
+            "currency": "SGD",
+            "description": desc,
+            "tags": [],
+            "link_labels": [],
+            "is_reversal": False,
+            "is_internal_transfer": False,
+            "linked_txn_ids": [],
+            "balance_after": round(balance, 2),
+        })
+    return {
+        "ir_version": "2026.5",
+        "parser": {"name": "demo_consolidated", "version": "1.0"},
+        "source_file": "demo_statements.pdf",
+        "statement_meta": {
+            "institution": "OCBC_SG",
+            "period_from": "2026-04-01",
+            "period_to": "2026-05-31",
+            "functional_currency": "SGD",
+        },
+        "accounts": [
+            {
+                "name": "DEMO SAVINGS",
+                "account_no": "xxx",
+                "account_type": "current",
+                "currency": "SGD",
+                "opening_balance": opening,
+                "closing_balance": round(balance, 2),
+                "transactions": txns,
+            }
+        ],
+    }
 
 
 def render_consolidated_report(
@@ -186,17 +207,13 @@ def main(argv: list[str] | None = None) -> int:
     args = p.parse_args(argv)
 
     if args.demo:
-        stmts = demo_statements()
-        for meta, txns in stmts:
-            result = {
-                "meta": meta, "metrics_by_ccy": _split_default(txns, meta),
-                "assets": build_assets(meta, _split_default(txns, meta)),
-                "has_txns": bool(txns),
-                "source": f"demo_{meta['period']['start'][:7]}.json",
-            }
-            text = render_report(result)
-            _ = Path(str(result["source"]).replace(".json", "_Finance_Report.md")).write_text(text, encoding="utf-8")
-            print(f"[DEMO] wrote {result['source']} report")
+        ir = demo_ir()
+        tmp = Path(tempfile.gettempdir()) / "demo_statements.ir.json"
+        _ = tmp.write_text(json.dumps(ir, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        text = render_consolidated_report(tmp)
+        out_path = Path("demo_Finance_Report.md")
+        _ = out_path.write_text(text, encoding="utf-8")
+        print(f"[DEMO] wrote {out_path}")
         return 0
 
     if not args.input:

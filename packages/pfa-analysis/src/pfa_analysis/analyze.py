@@ -1,28 +1,28 @@
 """Analyse personal balance sheet and cash flow from processed bank-statement JSON.
 
-Supports two input shapes, auto-detected:
+Input format: the consolidated ``.ir.json`` produced by the statement parser /
+consolidator, which nests every account under a top-level ``accounts[]`` array:
 
-1. **`.ir.json` parser output** (the real files in tests/cache):
-       { "statement_meta": {institution, currency, period_from/to,
-         opening_balance?, closing_balance?},
-         "transactions": [{posted_date, amount (signed), currency,
-           description, is_internal_transfer, balance_after, ...}],
-         "account_summary": [{account_no, currency, balance}],
-         "investment_holdings": [{currency, valuation}], "extras": {...} }
+    { "statement_meta": {institution, currency, period_from/to, ...},
+      "accounts": [ { "account_no", "account_type", "currency",
+                      "opening_balance", "closing_balance",
+                      "transactions": [{txn_id, posted_date, amount (signed),
+                        currency, description, is_internal_transfer,
+                        balance_after, ...}] } ],
+      "investment_holdings": [...], "extras": {...} }
 
-2. **Default/simple schema** (used by --demo and the documented example):
-       { "account": {...}, "period": {...}, "balances": {opening, closing},
-         "transactions": [{date, description, amount, currency, type}] }
+Single-account statements are simply a one-element ``accounts[]``. The legacy
+flat ``transactions[]`` and the simple ``{account, period, balances}`` schema are
+no longer supported.
 
 The skill focuses on balance sheet + cash flow (NOT merchant spending
 categorization). Cash flows are classified only as Income / Expense / Transfer
 In / Transfer Out — the minimum needed for an honest cash-flow statement.
 
-CLI:
+CLI (entry point: ``report.py``):
 
-    python analyze.py <statement.json> [output.md]
-    python analyze.py <consolidated.ir.json> [output_dir]  # consolidated SGD report
-    python analyze.py --demo                             # embedded synthetic data
+    python -m pfa_analysis.report <consolidated.ir.json> [output_dir]
+    python -m pfa_analysis.report --demo                  # embedded synthetic data
 
 Reports contain: Executive Summary, Balance Sheet (cash + deposits +
 investments, per currency), Cash Flow Statement (per currency, reconciled to
@@ -81,85 +81,44 @@ def parse_num(s: Any) -> float | None:
 # ---------------------------------------------------------------------------
 # Schema adaptation points
 # ---------------------------------------------------------------------------
-
-def normalize_transactions(statement: dict[str, Any]) -> list[Txn]:
-    """Map a raw statement JSON into the internal transaction model.
-
-    Two schemas are supported; dispatched by ``load_statement``. This function
-    handles the **default/simple** schema. Edit field mapping here if your
-    default-schema file differs. The `.ir.json` mapping lives in
-    ``_normalize_ir``.
-    """
-    raw = statement.get("transactions", [])
-    if not isinstance(raw, list):
-        print("[WARN] statement has no 'transactions' array.", file=sys.stderr)
-        return []
-    out: list[Txn] = []
-    for t in raw:
-        date = str(t.get("date", ""))
-        desc = str(t.get("description", t.get("narrative", ""))).strip()
-        amount = float(t.get("amount", 0.0))
-        currency = str(t.get("currency", statement.get("account", {}).get("currency", "")))
-        out.append(
-            {
-                "date": date,
-                "description": desc,
-                "amount": amount,
-                "currency": currency,
-                "is_internal_transfer": False,
-                "balance_after": None,
-            }
-        )
-    return out
-
-
-def _normalize_ir(transactions: list[dict[str, Any]]) -> list[Txn]:
-    """Map `.ir.json` transactions into the internal model."""
-    out: list[Txn] = []
-    for t in transactions:
-        out.append(
-            {
-                "date": str(t.get("posted_date", t.get("value_date", ""))),
-                "description": str(t.get("description", t.get("raw_description", ""))).strip(),
-                "amount": float(t.get("amount", 0.0)),
-                "currency": str(t.get("currency", "")),
-                "is_internal_transfer": bool(t.get("is_internal_transfer", False)),
-                "balance_after": parse_num(t.get("balance_after")),
-            }
-        )
-    return out
+#
+# Only the consolidated ``accounts[]`` IR is supported (see ``load_statement`` and
+# ``_load_consolidated_ir``). The legacy flat ``transactions[]`` mapping and the
+# simple ``{account, period, balances}`` schema were dropped.
 
 
 def _is_consolidated(data: dict[str, Any]) -> bool:
-    """A file is a consolidated IR when its parser name contains 'consolidate'.
+    """A file is a consolidated IR when it carries a top-level ``accounts[]`` array.
 
-    This is the single rule for detecting consolidation: the consolidated
-    parser (``bank-ir-consolidate``) tags every emitted file, so we don't rely
-    on incidental structural hints like the presence of ``accounts[]``.
+    Every supported input is a consolidated IR (single-account statements simply
+    have one entry in ``accounts[]``), so the structural presence of ``accounts[]``
+    is the single detection rule. Legacy flat ``transactions[]`` / simple-schema
+    files (which lack ``accounts[]``) are no longer accepted.
     """
-    name = str((data.get("parser") or {}).get("name", "")).lower()
-    return "consolidate" in name
+    return "accounts" in data
 
 
 def load_statement(path: Path,
                    start_date: str | None = None,
                    end_date: str | None = None) -> tuple[dict[str, Any], list[Txn]]:
-    """Load a JSON statement and return (meta, normalized transactions).
+    """Load a consolidated IR JSON and return (meta, normalized transactions).
 
-    Auto-detects the consolidated `.ir.json` (parser name contains
-    ``consolidate``), the single statement `.ir.json` parser output, or the
-    default schema.
+    The only supported input is a consolidated IR that nests every account under
+    a top-level ``accounts[]`` array (single-account statements are just a
+    one-element ``accounts[]``). Legacy flat ``transactions[]`` and simple
+    ``{account, period, balances}`` schemas raise ``ValueError``.
 
     When *start_date* and/or *end_date* are provided, transactions are
-    filtered to the inclusive date range (applies to consolidated IR only;
-    non-consolidated formats are not filtered).
+    filtered to the inclusive date range.
     """
     data = json.loads(path.read_text(encoding="utf-8"))
-    if _is_consolidated(data):
-        return _load_consolidated_ir(data, path, start_date, end_date)
-    if "statement_meta" in data:
-        return _load_ir(data)
-    return _load_default(data)
+    if "accounts" not in data:
+        raise ValueError(
+            f"{path.name}: unsupported statement format. Provide a consolidated "
+            f"`.ir.json` with a top-level `accounts[]` array (old flat-"
+            f"transactions / simple-schema formats are no longer supported)."
+        )
+    return _load_consolidated_ir(data, path, start_date, end_date)
 
 
 def _own_account_digits(accounts: list[dict[str, Any]]) -> set[str]:
@@ -238,39 +197,8 @@ def _load_consolidated_ir(data: dict[str, Any], path: Path,
     return meta, txns
 
 
-def _load_default(data: dict[str, Any]) -> tuple[dict[str, Any], list[Txn]]:
-    meta: dict[str, Any] = {
-        "bank": data.get("account", {}).get("bank", ""),
-        "account_no": data.get("account", {}).get("account_no", ""),
-        "currency": data.get("account", {}).get("currency", ""),
-        "period_start": data.get("period", {}).get("start"),
-        "period_end": data.get("period", {}).get("end"),
-        "opening": data.get("balances", {}).get("opening"),
-        "closing": data.get("balances", {}).get("closing"),
-        "account_summary": [],
-        "investment_holdings": [],
-        "extras": {},
-        "source_file": "",
-    }
-    return meta, normalize_transactions(data)
-
-
-def _load_ir(data: dict[str, Any]) -> tuple[dict[str, Any], list[Txn]]:
-    sm = data.get("statement_meta", {})
-    meta: dict[str, Any] = {
-        "bank": sm.get("institution", ""),
-        "account_no": sm.get("account_id", ""),
-        "currency": sm.get("currency", ""),
-        "period_start": sm.get("period_from"),
-        "period_end": sm.get("period_to"),
-        "opening": sm.get("opening_balance"),
-        "closing": sm.get("closing_balance"),
-        "account_summary": data.get("account_summary", []),
-        "investment_holdings": data.get("investment_holdings", []),
-        "extras": data.get("extras", {}),
-        "source_file": data.get("source_file", ""),
-    }
-    return meta, _normalize_ir(data.get("transactions", []))
+# Legacy loaders (_load_default / _load_ir) were removed; `load_statement` now
+# requires the consolidated `accounts[]` IR (see `_load_consolidated_ir`).
 
 
 # ---------------------------------------------------------------------------
@@ -296,8 +224,7 @@ def _is_debit(txn: Txn) -> bool:
     The sign convention differs by account type:
       * current / savings / fixed / investment accounts: negative = debit.
       * credit_card accounts: positive = charge = debit (banking convention).
-    Transactions without an ``account_type`` (legacy single-statement IR)
-    fall back to the standard negative-is-debit rule.
+    Every supported IR carries ``account_type`` via its ``accounts[]`` entry.
     """
     at = str(txn.get("account_type", "")).lower()
     if at in _CREDIT_LIKE_ACCOUNTS:
@@ -694,13 +621,9 @@ def _analyze_file(path: Path,
     raw = json.loads(Path(path).read_text(encoding="utf-8"))
     meta, txns = load_statement(path, start_date, end_date)
     use_txn_balances = bool(start_date or end_date)
-    if meta.get("_consolidated"):
-        return _analyze_consolidated(raw, meta, txns, path,
-                                     use_txn_balances=use_txn_balances,
-                                     txn_categories=txn_categories)
-    return analyze_statement(raw, meta, txns, path,
-                             use_txn_balances=use_txn_balances,
-                             txn_categories=txn_categories)
+    return _analyze_consolidated(raw, meta, txns, path,
+                                 use_txn_balances=use_txn_balances,
+                                 txn_categories=txn_categories)
 
 
 def _analyze_consolidated(raw: dict[str, Any], meta: dict[str, Any],
@@ -775,50 +698,8 @@ def _analyze_consolidated(raw: dict[str, Any], meta: dict[str, Any],
     }
 
 
-def analyze_statement(raw: dict[str, Any], meta: dict[str, Any],
-                      txns: list[Txn], path: Path,
-                      use_txn_balances: bool = False,
-                      txn_categories: dict[str, str] | None = None) -> dict[str, Any]:
-    """Per-file IR: metrics inferred from statement_meta / transaction flow.
-
-    When ``use_txn_balances`` is True (e.g. transactions have been filtered by
-    ``start_date``/``end_date``), statement-meta balances are ignored and
-    opening/closing are derived from the filtered transaction stream instead.
-    """
-    demote_orphan_internal_transfers(txns, own_liability_digits=_own_liability_digits(raw.get("accounts", [])))
-    by_ccy: dict[str, list[Txn]] = defaultdict(list)
-    for t in txns:
-        by_ccy[t["currency"]].append(t)
-    for lst in by_ccy.values():
-        lst.sort(key=lambda x: x["date"])
-
-    metrics_by_ccy: dict[str, dict[str, Any]] = {}
-    for ccy, lst in by_ccy.items():
-        metrics_by_ccy[ccy] = compute_metrics(lst, meta, ccy,
-                                              use_txn_balances=use_txn_balances,
-                                              txn_categories=txn_categories)
-
-    cc_balances: dict[str, float] = {}
-    cc_txns = sorted(
-        (t for t in txns if str(t.get("account_type", "")).lower() in _LIABILITY_ACCOUNT_TYPES),
-        key=lambda t: t["date"], reverse=True,
-    )
-    for t in cc_txns:
-        ccy = t["currency"]
-        if ccy in cc_balances:
-            continue
-        bal = t.get("balance_after")
-        if bal is not None and bal > 0:
-            cc_balances[ccy] = bal
-
-    assets = build_assets(meta, metrics_by_ccy, cc_balances=cc_balances)
-    drilldown = build_balance_sheet_drilldown(raw, cc_balances=cc_balances,
-                                             use_txn_balances=use_txn_balances)
-    _assert_drilldown_reconciles(assets, drilldown)
-    return {
-        "meta": meta, "metrics_by_ccy": metrics_by_ccy, "assets": assets,
-        "drilldown": drilldown, "has_txns": bool(txns), "source": path.name,
-    }
+# The per-file (non-consolidated) analysis path was removed: every supported IR
+# now carries ``accounts[]`` and is analysed by ``_analyze_consolidated``.
 
 
 # ---------------------------------------------------------------------------
@@ -828,7 +709,7 @@ def analyze_statement(raw: dict[str, Any], meta: dict[str, Any],
 from pfa_analysis.categorize import UNCATEGORIZED  # noqa: E402
 from pfa_analysis.render_md import render_report, fmt  # noqa: E402
 
-# Demo data (default schema, single currency)
+# Per-file processing helper
 # ---------------------------------------------------------------------------
 
 def process_one_file(path: Path, out_dir: Path) -> dict[str, Any]:
@@ -1236,12 +1117,8 @@ def build_fx_drilldown(
     )
 
 
-def _split_default(txns: list[Txn], meta: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    """Helper for demo: group default-schema txns by currency and compute metrics."""
-    by_ccy: dict[str, list[Txn]] = defaultdict(list)
-    for t in txns:
-        by_ccy[t["currency"]].append(t)
-    return {ccy: compute_metrics(lst, meta, ccy) for ccy, lst in by_ccy.items()}
+# The demo helper `_split_default` was removed when --demo moved to the
+# consolidated `accounts[]` IR (see `report.py::demo_ir`).
 
 
 # ---------------------------------------------------------------------------
@@ -1358,10 +1235,10 @@ def _load_ir_with_txn_id(path: Path,
                          start_date: str | None = None,
                          end_date: str | None = None,
                          keep_internal: bool = False) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    """Load an IR JSON and return (meta, flat_txn_rows_with_txn_id).
+    """Load a consolidated IR JSON and return (meta, flat_txn_rows_with_txn_id).
 
-    Handles both old (flat ``transactions[]``) and new
-    (nested ``accounts[].transactions[]``) IR formats.
+    Only the nested ``accounts[].transactions[]`` IR format is supported; the
+    legacy flat ``transactions[]`` format is no longer accepted.
     Each returned row has: txn_id, date, description, amount, currency,
     balance_after, bank, account, is_internal_transfer.
 
@@ -1374,7 +1251,7 @@ def _load_ir_with_txn_id(path: Path,
     meta = _build_meta(data, path)
     rows: list[dict[str, Any]]
 
-    # Detect new format: has top-level "accounts" array
+    # Only the nested accounts[] IR format is supported.
     if "accounts" in data:
         rows = []
         own_digits = _own_account_digits(data.get("accounts", []))
@@ -1420,20 +1297,10 @@ def _load_ir_with_txn_id(path: Path,
             rows = [r for r in rows if not r["is_internal_transfer"]]
         return meta, rows
 
-    # Old format: flat transactions[]
-    rows = []
-    for txn in data.get("transactions", []):
-        rows.append({
-            "txn_id": str(txn.get("txn_id", "")),
-            "date": str(txn.get("posted_date", txn.get("value_date", ""))),
-            "description": str(txn.get("description", "")).strip(),
-            "amount": float(txn.get("amount", 0.0)),
-            "currency": str(txn.get("currency", "")),
-            "balance_after": parse_num(txn.get("balance_after")),
-            "bank": meta["bank"],
-            "account": meta["account_no"],
-            "is_internal_transfer": bool(txn.get("is_internal_transfer", False)),
-            "link_labels": list(txn.get("link_labels", []) or []),
-            "linked_txn_ids": list(txn.get("linked_txn_ids", []) or []),
-        })
-    return meta, rows
+    # Legacy flat transactions[] format is no longer supported; every IR must
+    # carry a top-level accounts[] array (handled by the branch above).
+    raise ValueError(
+        f"{path.name}: unsupported IR format. Provide a consolidated `.ir.json` "
+        f"with a top-level `accounts[]` array (old flat-transactions format is no "
+        f"longer supported)."
+    )
