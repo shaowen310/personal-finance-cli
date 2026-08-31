@@ -4,7 +4,7 @@ After consolidating IRs from multiple banks, these passes scan for transaction
 pairs where money moved between accounts:
 
   * **Inter-bank**: accounts at *different* institutions (e.g.
-    DBS FAST OUT $1,000 ←→ OCBC FAST IN $1,000).
+    DBS FAST OUT $1,000 → OCBC FAST IN $1,000).
   * **Intra-bank**: current accounts at the *same* institution (e.g.
     DBS Savings → DBS Current $500).
   * **Currency Conversion**: multi-currency internal transfers within the same
@@ -81,6 +81,24 @@ def _is_transfer_like(description: str) -> bool:
 # an asset account into one of these is an internal transfer (money moved between
 # the holder's own accounts), not new spending.
 _INVESTMENT_ACCOUNT_TYPES = frozenset({"srs", "unit_trust", "fixed_deposit"})
+
+# Two-letter account-type abbreviations used in human-facing warnings, mirroring
+# the "CA"/"CC" style of the CC-payment warning (CA = current, CC = credit card).
+_ACCOUNT_TYPE_ABBR = {
+    "current": "CA",
+    "credit_card": "CC",
+    "savings": "SA",
+    "ewallet": "EW",
+    "unit_trust": "UT",
+    "srs": "SR",
+    "fixed_deposit": "FD",
+}
+
+
+def _acct_type_abbr(account_type: str) -> str:
+    """Abbreviate an account type for warnings, e.g. 'current' -> 'CA'."""
+    key = (account_type or "").lower()
+    return _ACCOUNT_TYPE_ABBR.get(key, (key or "?").upper()[:2])
 
 
 def detect_inter_bank_transfers(statement: Any) -> Any:
@@ -164,9 +182,9 @@ def detect_inter_bank_transfers(statement: Any) -> Any:
                 # Emit warning.
                 warn = (
                     f"Inter-bank transfer detected: {txn_a.txn_id!r} "
-                    f"(account {acct_a.account_no}, {inst_a}) ←→ "
+                    f"({_acct_type_abbr(acct_a.account_type)} {acct_a.account_no}, {inst_a}) → "
                     f"{txn_b.txn_id!r} "
-                    f"(account {acct_b.account_no}, {inst_b}), "
+                    f"({_acct_type_abbr(acct_b.account_type)} {acct_b.account_no}, {inst_b}), "
                     f"amount {abs(txn_a.amount):,.2f}, date {posted_date}"
                 )
                 if warn not in statement.warnings:
@@ -309,9 +327,9 @@ def detect_intra_bank_transfers(statement: Any) -> Any:
 
                 warn = (
                     f"Intra-bank transfer detected: {txn_a.txn_id!r} "
-                    f"(account {acct_a.account_no}, {inst_a}) ←→ "
+                    f"({_acct_type_abbr(acct_a.account_type)} {acct_a.account_no}, {inst_a}) → "
                     f"{txn_b.txn_id!r} "
-                    f"(account {acct_b.account_no}, {inst_b}), "
+                    f"({_acct_type_abbr(acct_b.account_type)} {acct_b.account_no}, {inst_b}), "
                     f"amount {abs(txn_a.amount):,.2f}, date {posted_date}"
                 )
                 if warn not in statement.warnings:
@@ -439,9 +457,9 @@ def detect_currency_conversions(statement: Any) -> Any:
 
         warn = (
             f"Currency conversion transfer detected: {txn_a.txn_id!r} "
-            f"(account {acct_a.account_no}, {txn_a.currency} {txn_a.amount:,.2f}, {inst}) ←→ "
+            f"({_acct_type_abbr(acct_a.account_type)} {acct_a.account_no}, {txn_a.currency} {txn_a.amount:,.2f}, {inst}) → "
             f"{txn_b.txn_id!r} "
-            f"(account {acct_b.account_no}, {txn_b.currency} {txn_b.amount:,.2f}, {inst}), "
+            f"({_acct_type_abbr(acct_b.account_type)} {acct_b.account_no}, {txn_b.currency} {txn_b.amount:,.2f}, {inst}), "
             f"ref_id {ref_id}"
         )
         if warn not in statement.warnings:
@@ -567,8 +585,8 @@ def detect_cc_payments(statement: Any) -> Any:
                 cc_acct = acct_a if role_a == "credit_card" else acct_b
                 warn = (
                     f"CC payment detected: "
-                    f"(CA {ca_acct.account_no}, {inst_a}) → "
-                    f"(CC {cc_acct.account_no}, {inst_a}), "
+                    f"({_acct_type_abbr(ca_acct.account_type)} {ca_acct.account_no}, {inst_a}) → "
+                    f"({_acct_type_abbr(cc_acct.account_type)} {cc_acct.account_no}, {inst_a}), "
                     f"amount {abs(txn_a.amount):,.2f}, date {posted_date}"
                 )
                 if warn not in statement.warnings:
@@ -747,9 +765,24 @@ def detect_investment_transfers(statement: Any) -> Any:
             # counterparty investment account so the internal transfer nets to
             # zero in funds-flow analysis (see ``_add_investment_writeoff``).
             _add_investment_writeoff(statement, asset_txn, ref_inv)
+            # Resolve the formatted investment account number(s) referenced by
+            # this asset leg so the warning names the actual account.
+            inv_accts = [
+                (acct.account_no, acct.account_type, acct.institution)
+                for acct in statement.accounts
+                if (acct.account_type or "").lower() in _INVESTMENT_ACCOUNT_TYPES
+                and re.sub(r"\D", "", acct.account_no or "") in ref_inv
+            ]
+            if inv_accts:
+                inv_target = ", ".join(
+                    f"{_acct_type_abbr(t)} {no}, {inst}" for no, t, inst in inv_accts
+                )
+            else:
+                inv_target = ", ".join(sorted(ref_inv))
             warn = (
-                f"Investment transfer (single-leg) detected: (asset "
-                f"{asset_acct.account_no}) → own investment account, "
+                f"Investment transfer (single-leg) detected: "
+                f"({_acct_type_abbr(asset_acct.account_type)} {asset_acct.account_no}, "
+                f"{asset_acct.institution}) → ({inv_target}), "
                 f"amount {abs(asset_txn.amount):,.2f}, date {asset_txn.posted_date}"
             )
             if warn not in statement.warnings:
