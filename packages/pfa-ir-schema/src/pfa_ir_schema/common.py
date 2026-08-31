@@ -403,16 +403,52 @@ def _parse_fd_date(s: str | None) -> date | None:
     return None
 
 
-def format_fd_period(value_date: str | None, maturity_date: str | None) -> str:
-    """Render the FD term as an actual/365 day-count string, e.g. ``"365/365"``.
+# Day-count basis (days per year) used by each institution for FD simple interest.
+# Most Singapore retail banks compute FD interest on an actual/365 basis, but ICBC
+# (a Chinese bank) uses actual/360. Such differences are convention, not data errors,
+# so verification and display must follow the institution's basis.
+FD_DAY_COUNT_BY_INSTITUTION: dict[str, int] = {
+    "ICBC": 360,
+}
+
+
+def _fd_day_count(institution: str | None) -> int:
+    """Resolve the day-count basis (days/year) for *institution*.
+
+    Returns 360 for ICBC-family institutions and 365 otherwise. Matching is
+    token-based (split on non-alphanumerics), so variants such as ``"ICBC_SG"``
+    resolve to the ``"ICBC"`` entry without being listed explicitly, while an
+    unrelated name merely containing ``"ICBC"`` as a substring (e.g. ``"XICBC"``)
+    does not match.
+    """
+    key = (institution or "").strip().upper()
+    if key in FD_DAY_COUNT_BY_INSTITUTION:
+        return FD_DAY_COUNT_BY_INSTITUTION[key]
+    for token in re.split(r"[^A-Z0-9]+", key):
+        if token in FD_DAY_COUNT_BY_INSTITUTION:
+            return FD_DAY_COUNT_BY_INSTITUTION[token]
+    return 365
+
+
+def format_fd_period(
+    value_date: str | None,
+    maturity_date: str | None,
+    institution: str | None = None,
+    day_count: int | None = None,
+) -> str:
+    """Render the FD term as an actual/<basis> day-count string, e.g. ``"181/365"``.
+
+    The basis defaults to 365 but follows the institution's convention when known
+    (ICBC uses 360). ``day_count`` overrides the institution lookup when provided.
 
     Returns ``"—"`` when the dates are missing, invalid, or inverted.
     """
+    basis = day_count if (isinstance(day_count, int) and day_count > 0) else _fd_day_count(institution)
     vd = _parse_fd_date(value_date)
     mat = _parse_fd_date(maturity_date)
     if vd is None or mat is None or mat < vd:
         return "—"
-    return f"{(mat - vd).days}/365"
+    return f"{(mat - vd).days}/{basis}"
 
 
 def verify_fd_interest(
@@ -423,12 +459,16 @@ def verify_fd_interest(
     interest_amount: float | None,
     *,
     tol: float = 0.01,
+    institution: str | None = None,
+    day_count: int | None = None,
 ) -> str | None:
     """Return a warning string if ``principal × rate × period ≠ interest_amount``.
 
     Skips (returns ``None``) when ``interest_amount`` is ``None`` (e.g. OCBC),
     the rate is unparseable, or the dates are missing/invalid/non-positive.
-    Period (years) is ``(maturity - value).days / 365`` (actual/365 basis).
+    Period (years) is ``(maturity - value).days / basis`` where ``basis`` follows
+    the institution's day-count convention (actual/365 by default; actual/360 for
+    ICBC). ``day_count`` overrides the institution lookup when provided.
 
     ``interest_rate`` may be either an already-decimal value (``0.025``) or a
     raw string (``"2.5%"``); a decimal is passed through directly.
@@ -445,13 +485,14 @@ def verify_fd_interest(
     mat = _parse_fd_date(maturity_date)
     if vd is None or mat is None or mat <= vd:
         return None
-    period_years = (mat - vd).days / 365.0
+    basis = day_count if (isinstance(day_count, int) and day_count > 0) else _fd_day_count(institution)
+    period_years = (mat - vd).days / basis
     expected = principal * rate * period_years
     if abs(interest_amount - expected) > tol:
         return (
             f"FD interest mismatch: principal {principal:,.2f} × rate {rate:.6f} "
-            f"× period {period_years:.6f}y = {expected:,.2f}, but stated interest "
-            f"amount is {interest_amount:,.2f} "
+            f"× period {period_years:.6f}y (actual/{basis}d) = {expected:,.2f}, "
+            f"but stated interest amount is {interest_amount:,.2f} "
             f"(diff={abs(interest_amount - expected):.2f})"
         )
     return None

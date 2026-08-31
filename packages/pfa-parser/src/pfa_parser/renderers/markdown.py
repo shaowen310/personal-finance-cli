@@ -881,7 +881,7 @@ def icbc_ir_to_markdown(statement: ParsedStatement, *, do_mask: bool = True) -> 
                     pr_str = f"{pr:,.2f}"
                     out.append(
                         f"| {mask_id(r.deposit_no, do_mask=do_mask)} | {vd} | {mat} | "
-                        + f"{format_fd_period(r.value_date, r.maturity_date)} | "
+                        + f"{format_fd_period(r.value_date, r.maturity_date, institution=statement.statement_meta.institution)} | "
                         + f"{r.currency} | {pr_str} | {_fd_rate_display(r)} | {ia_str} |"
                     )
                 out.append("")

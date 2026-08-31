@@ -608,6 +608,7 @@ def verify_fd_interest_consistency(statement: ParsedStatement) -> ParsedStatemen
                 value_date=rec.value_date,
                 maturity_date=rec.maturity_date,
                 interest_amount=rec.interest_amount,
+                institution=statement.statement_meta.institution,
             )
             if warn and warn not in statement.warnings:
                 statement.warnings.append(warn)
