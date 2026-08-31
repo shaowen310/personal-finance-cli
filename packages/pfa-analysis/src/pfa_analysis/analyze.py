@@ -24,7 +24,7 @@ CLI (entry point: ``report.py``):
     python -m pfa_analysis.report <consolidated.ir.json> [output_dir]
     python -m pfa_analysis.report --demo                  # embedded synthetic data
 
-Reports contain: Executive Summary, Balance Sheet (cash + deposits +
+Reports contain: Summary, Balance Sheet (cash + deposits +
 investments, per currency), Cash Flow Statement (per currency, reconciled to
 balance), Key Observations, Notes & Caveats.
 """
@@ -415,38 +415,34 @@ def compute_metrics(txns: list[Txn], meta: dict[str, Any], ccy: str,
     }
 
 
-def build_assets(meta: dict[str, Any], metrics_by_ccy: dict[str, dict[str, Any]],
+def build_assets(meta: dict[str, Any],
                   cc_balances: dict[str, float] | None = None) -> dict[str, dict[str, float]]:
     """Assemble balance-sheet assets: cash, time deposits, investments (per currency).
 
     Credit-card balances are treated as liabilities (deducted from net worth).
     *cc_balances* is a ``{ccy: balance}`` dict derived from the last
     ``balance_after`` on credit-card transactions.
+
+    Every supported IR carries ``accounts[]``; :func:`_build_meta` derives
+    ``account_summary`` from them, so the cash/liability balances always come
+    from the statement's account closings (the legacy transaction-derived
+    fallback has been removed).
     """
     cash: dict[str, float] = defaultdict(float)
     liabilities: dict[str, float] = defaultdict(float)
     _NON_CASH = _NON_CASH_ACCOUNT_TYPES
-    if meta.get("account_summary"):
-        for a in meta["account_summary"]:
-            at = str(a.get("account_type", "")).lower()
-            if at in _NON_CASH or at in _LIABILITY_ACCOUNT_TYPES:
-                continue
-            c = a.get("currency")
-            b = parse_num(a.get("closing_balance"))
-            if c and b is not None:
-                cash[c] += b
-    else:
-        for ccy, m in metrics_by_ccy.items():
-            if m["closing"] is not None:
-                cash[ccy] += m["closing"]
+    for a in meta.get("account_summary") or []:
+        at = str(a.get("account_type", "")).lower()
+        if at in _NON_CASH or at in _LIABILITY_ACCOUNT_TYPES:
+            continue
+        c = a.get("currency")
+        b = parse_num(a.get("closing_balance"))
+        if c and b is not None:
+            cash[c] += b
     if cc_balances:
         for ccy, bal in cc_balances.items():
             if bal > 0:
                 liabilities[ccy] += bal
-    elif not meta.get("account_summary"):
-        for ccy, m in metrics_by_ccy.items():
-            if m["closing"] is not None:
-                cash[ccy] += m["closing"]
 
     time_dep: dict[str, float] = defaultdict(float)
     for td in meta.get("extras", {}).get("time_deposits", []):
@@ -688,7 +684,7 @@ def _analyze_consolidated(raw: dict[str, Any], meta: dict[str, Any],
             txn_categories=txn_categories,
         )
 
-    assets = build_assets(meta, metrics_by_ccy, cc_balances=cc_balances)
+    assets = build_assets(meta, cc_balances=cc_balances)
     drilldown = build_balance_sheet_drilldown(raw, cc_balances=cc_balances,
                                              use_txn_balances=use_txn_balances)
     _assert_drilldown_reconciles(assets, drilldown)

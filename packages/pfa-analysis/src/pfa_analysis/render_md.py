@@ -190,37 +190,83 @@ def render_report(result: dict[str, Any], consolidated: bool = False,
         out.append("**Scope:** consolidated balances across all input accounts, per currency.\n")
     out.append("---\n")
 
-    # ---- 1. Executive Summary ------------------------------------------------
-    out.append("## 1. Executive Summary\n")
+    # ---- 1. Summary ----------------------------------------------------------
+    out.append("## 1. Summary\n")
     net_pos = (sum(assets["cash"].values()) + sum(assets["time_deposits"].values())
                + sum(assets["investments"].values()))
-    if mbc:
-        for ccy in sorted(mbc):
-            m = mbc[ccy]
-            if m["income"] <= 0 or abs(m["savings_rate"]) > 10:
-                savings_disp = "n/a"
-            else:
-                savings_disp = f"{m['savings_rate'] * 100:.1f}%"
+    liabilities_bs = assets.get("liabilities", {})
+    has_balances = (bool(mbc) or any(assets["cash"].values())
+                    or any(assets["time_deposits"].values())
+                    or any(assets["investments"].values()) or any(liabilities_bs.values()))
+    if has_balances:
+        # Mirror the Balance Sheet currency set (account balances), so currencies
+        # with a balance but no transactions in the window (e.g. a dormant USD
+        # account) still appear here. Transaction-derived metrics default to zeros.
+        def _default_metrics() -> dict[str, Any]:
+            return {"income": 0.0, "expense": 0.0, "transfer_in_external": 0.0,
+                    "transfer_out_external": 0.0, "net_change_cash": 0.0,
+                    "net_operating": 0.0, "savings_rate": 0.0, "closing": None}
+        exec_ccies = sorted(
+            c for c in (set(mbc) | set(assets["cash"]) | set(assets["time_deposits"])
+                        | set(assets["investments"]) | set(liabilities_bs))
+            if (assets["cash"].get(c, 0.0) + assets["time_deposits"].get(c, 0.0)
+                + assets["investments"].get(c, 0.0) + liabilities_bs.get(c, 0.0)) != 0.0
+        )
+        # Closing mirrors the Balance Sheet "Net Position" row (Cash + Time
+        # Deposits + Investments - Liabilities), so the headline figures agree.
+        def _net_pos(ccy: str) -> float:
+            return (assets["cash"].get(ccy, 0.0) + assets["time_deposits"].get(ccy, 0.0)
+                    + assets["investments"].get(ccy, 0.0) - liabilities_bs.get(ccy, 0.0))
+        # Table 1: per native currency
+        out.append("| Currency | Closing | Income | Expense | Net |")
+        out.append("|---|---:|---:|---:|---:|")
+        for ccy in exec_ccies:
+            m = mbc.get(ccy) or _default_metrics()
+            # Income / Net mirror the Funds Flow Statement (\u00a73): external
+            # transfers are part of operating, internal transfers are excluded.
+            income_ff = m["income"] + m["transfer_in_external"]
+            net_ff = (m["income"] + m["transfer_in_external"]
+                      - m["expense"] - m["transfer_out_external"])
             out.append(
-                f"- **{ccy}** \u2014 Closing: {fmt(m['closing'])} | "
-                + f"Net Funds Flow: {fmt(m['net_change_cash'])} | "
-                + f"Net Operating: {fmt(m['net_operating'])} | "
-                + f"Savings: {savings_disp}"
+                f"| {ccy} | {fmt(_net_pos(ccy))} | "
+                + f"{fmt(income_ff)} | {fmt(m['expense'] + m['transfer_out_external'])} | {fmt(net_ff)} |"
             )
         if use_fx:
             assert fx_rates is not None  # guaranteed by use_fx
-            sgd_pos = 0.0
-            for kind in ("cash", "time_deposits", "investments"):
-                for c, v in assets[kind].items():
-                    conv = convert_to_sgd(v, c, fx_rates)
-                    if conv is not None:
-                        sgd_pos += conv
+            fx_date = fx_rates.get("date", "")
+            # Table 2: SGD-equivalent
+            out.append("")
+            out.append(f"**SGD Equivalent (as of {fx_date}):**\n")
+            out.append("| Currency | Closing (SGD) | Income (SGD) | Expense (SGD) | Net (SGD) |")
+            out.append("|---|---:|---:|---:|---:|")
+            total_closing = total_income = total_expense = total_net = 0.0
+            for ccy in exec_ccies:
+                m = mbc.get(ccy) or _default_metrics()
+                closing_sgd = convert_to_sgd(_net_pos(ccy), ccy, fx_rates)
+                income_sgd = convert_to_sgd(m["income"] + m["transfer_in_external"], ccy, fx_rates)
+                expense_sgd = convert_to_sgd(m["expense"] + m["transfer_out_external"], ccy, fx_rates)
+                net_sgd = convert_to_sgd((m["income"] + m["transfer_in_external"]
+                                         - m["expense"] - m["transfer_out_external"]), ccy, fx_rates)
+                out.append(
+                    f"| {ccy} | {fmt(closing_sgd)} | {fmt(income_sgd)} | "
+                    + f"{fmt(expense_sgd)} | {fmt(net_sgd)} |"
+                )
+                total_closing += closing_sgd or 0.0
+                total_income += income_sgd or 0.0
+                total_expense += expense_sgd or 0.0
+                total_net += net_sgd or 0.0
             out.append(
-                f"- **Net Position (SGD equivalent, as of {fx_rates['date']}):** {fmt(sgd_pos)} SGD\n"
+                f"| **Total** | {fmt(total_closing)} | {fmt(total_income)} | "
+                + f"{fmt(total_expense)} | {fmt(total_net)} |"
             )
+            total_savings = (f"{total_net / total_income * 100:.1f}%"
+                             if total_income > 0
+                             else "n/a")
+            out.append("")
+            out.append(f"- **Total Savings Rate:** {total_savings}")
         else:
             out.append(
-                f"- **Net Position (cash + deposits + investments):** {fmt(net_pos)} "
+                f"\n- **Net Position (cash + deposits + investments):** {fmt(net_pos)} "
                 + "across the currencies above.\n"
             )
     else:

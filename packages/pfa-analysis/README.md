@@ -64,7 +64,7 @@ python -m pfa_analysis.analyze consolidated.ir.json output_dir/
 python -m pfa_analysis.analyze --demo
 ```
 
-The report contains: **Executive Summary**, **Categorization Summary**,
+The report contains: **Summary**, **Categorization Summary**,
 **Balance Sheet** (per currency, with drill-down), **Cash Flow Statement**
 (per currency, reconciled), **Income Breakdown**, **Expense Breakdown**,
 **Transfer Breakdown**, **Key Observations**, **FX Rates Reference**, and
