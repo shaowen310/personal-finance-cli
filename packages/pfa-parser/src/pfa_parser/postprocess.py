@@ -22,8 +22,10 @@ from pfa_ir_schema.relations import (
     REL_FD_INTEREST,
     REL_FD_PRINCIPAL,
 )
-# Transaction link-integrity verification now lives in pfa-ir-verifier (the
-# canonical home for all IR verification); re-use it here rather than duplicating.
+# Transaction link-integrity *verification* (verify_txn_links) lives in
+# pfa-ir-verifier (the canonical home for IR verification); re-use it here.
+# FD<->CA *linking* (link_fd_to_ca) is still defined locally below, not in
+# the verifier.
 from pfa_ir_verifier import verify_txn_links
 
 
@@ -39,6 +41,9 @@ def fill_fd_running_balances(statement: ParsedStatement) -> ParsedStatement:
       derived as the sum of principals of deposits placed *before* the first
       movement (i.e. still live at the start of the period) and persisted back
       to the account so downstream passes don't re-derive a conflicting value.
+    * ``closing_balance`` is intentionally NOT set here — ``fill_account_balances``
+      (which runs after this pass) derives it from the ``balance_after`` rebuilt
+      below, so this pass must stay ordered before it.
     * Each movement adds (positive amount) or removes (negative amount)
       principal. Interest-only
       rows leave the balance unchanged, populating ``balance_after`` on every
