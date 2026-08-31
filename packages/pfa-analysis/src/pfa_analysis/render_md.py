@@ -847,11 +847,11 @@ def render_report(result: dict[str, Any], consolidated: bool = False,
     if cf_liab_rows:
         detail = "; ".join(
             f"{r['institution']} {r['account_no']} "
-            f"(stmt ends {r.get('period_to') or 'n/a'}, {r['currency']} {fmt(r['native_value'])})"
+            f"(data ends {r.get('latest_covered') or 'n/a'}, {r['currency']} {fmt(r['native_value'])})"
             for r in cf_liab_rows
         )
         report_warnings.append(
-            "Credit-card balance carried forward: " + detail + " \u2014 statement period ends "
+            "Credit-card balance carried forward: " + detail + " \u2014 card data ends "
             "before the report-window end, so the reported balance is not the position as of "
             "the window end. Verify against the latest statement."
         )

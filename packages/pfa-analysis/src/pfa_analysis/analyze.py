@@ -548,13 +548,14 @@ def build_balance_sheet_drilldown(raw: dict[str, Any],
              value: float, deriv: str, carried_forward: bool = False,
              period_to: str | None = None,
              missing_early: bool = False,
-             earliest_covered: str | None = None) -> None:
+             earliest_covered: str | None = None,
+             latest_covered: str | None = None) -> None:
         rows.append({
             "currency": ccy, "institution": inst, "account_no": acc,
             "account_type": at, "bucket": bucket, "native_value": value,
             "derivation": deriv, "carried_forward": carried_forward,
             "period_to": period_to, "missing_early": missing_early,
-            "earliest_covered": earliest_covered,
+            "earliest_covered": earliest_covered, "latest_covered": latest_covered,
         })
 
     # ---- Consolidated IR (accounts[] with closing_balance / fd_records / holdings)
@@ -567,50 +568,51 @@ def build_balance_sheet_drilldown(raw: dict[str, Any],
             acc = acct.get("account_no", "")
             cb = parse_num(acct.get("closing_balance"))
             if at in _LIABILITY_ACCOUNT_TYPES:
-                # Stale / carried forward = the card's statement period ends before
-                # the report-window end. Whatever balance we show (cutoff
-                # balance_after or closing balance) is then NOT the position as of
-                # the window end — even if the card has transactions inside the
-                # window. Flag it so the reader knows the liability is approximate.
                 last_stmt = acct.get("period_to")
-                cf = bool(use_txn_balances and end_date and last_stmt and last_stmt < end_date)
+                cc_txns = acct.get("transactions") or []
+                txn_dts = [t.get("posted_date") for t in cc_txns if t.get("posted_date")]
+                # Coverage window derived from the actual transactions. period_to /
+                # period_from are per-statement and unreliable once statements are
+                # merged into one account, so prefer the real posted_date extremes
+                # (fall back to the statement period fields when no txns exist).
+                earliest = min(txn_dts) if txn_dts else acct.get("period_from")
+                latest = max(txn_dts) if txn_dts else last_stmt
+                # Stale / carried forward = the card's data ends before the
+                # report-window end, so whatever balance we show (cutoff
+                # balance_after or closing balance) is NOT the position as of the
+                # window end — even if the card has transactions inside the window.
+                # Flag it so the reader knows the liability is approximate.
+                cf = bool(use_txn_balances and end_date and latest and latest < end_date)
                 # Missing-early = the card's earliest covered transaction is AFTER the
                 # window start, i.e. card activity in [start_date, earliest) is not in
                 # this report at all (it lives in a prior statement we don't have).
-                # period_from is often empty in consolidated IR, so derive the earliest
-                # covered date from the transaction posted_dates (fall back to period_from).
-                cc_txns = acct.get("transactions") or []
-                earliest = None
-                if cc_txns:
-                    dts = [t.get("posted_date") for t in cc_txns if t.get("posted_date")]
-                    if dts:
-                        earliest = min(dts)
-                earliest = earliest or acct.get("period_from")
                 missing_early = bool(use_txn_balances and start_date
                                      and earliest and start_date < earliest)
                 cutoff_bal = cc_balances.get(acc) if (use_txn_balances and cc_balances) else None
                 if cutoff_bal is not None:
                     deriv = "balance_after as of cutoff (credit-card debt)"
                     if cf:
-                        deriv += (f" — carried forward; statement ends {last_stmt}, "
+                        deriv += (f" — carried forward; data ends {latest}, "
                                   f"before window end {end_date}")
                     if missing_early:
                         deriv += (f" — card transactions before {earliest} missing; "
                                   f"earliest covered date after window start {start_date}")
                     _add(ccy, inst, acc, at, "Liability", cutoff_bal, deriv,
                          carried_forward=cf, period_to=last_stmt,
-                         missing_early=missing_early, earliest_covered=earliest)
+                         missing_early=missing_early, earliest_covered=earliest,
+                         latest_covered=latest)
                 elif cb is not None:
                     deriv = "account closing_balance (credit-card debt)"
                     if cf:
-                        deriv += (f" — carried forward; statement ends {last_stmt}, "
+                        deriv += (f" — carried forward; data ends {latest}, "
                                   f"before window end {end_date}")
                     if missing_early:
                         deriv += (f" — card transactions before {earliest} missing; "
                                   f"earliest covered date after window start {start_date}")
                     _add(ccy, inst, acc, at, "Liability", abs(cb), deriv,
                          carried_forward=cf, period_to=last_stmt,
-                         missing_early=missing_early, earliest_covered=earliest)
+                         missing_early=missing_early, earliest_covered=earliest,
+                         latest_covered=latest)
                 else:
                     _add(ccy, inst, acc, at, "Dropped", 0.0,
                          "DROPPED: credit_card closing_balance is null")
@@ -649,26 +651,24 @@ def build_balance_sheet_drilldown(raw: dict[str, Any],
         bal = parse_num(a.get("closing_balance")) or 0.0
         if at in _LIABILITY_ACCOUNT_TYPES:
             last_stmt = a.get("period_to")
-            cf = bool(use_txn_balances and end_date and last_stmt and last_stmt < end_date)
             cc_txns = a.get("transactions") or []
-            earliest = None
-            if cc_txns:
-                dts = [t.get("posted_date") for t in cc_txns if t.get("posted_date")]
-                if dts:
-                    earliest = min(dts)
-            earliest = earliest or a.get("period_from")
+            dts = [t.get("posted_date") for t in cc_txns if t.get("posted_date")]
+            earliest = min(dts) if dts else a.get("period_from")
+            latest = max(dts) if dts else last_stmt
+            cf = bool(use_txn_balances and end_date and latest and latest < end_date)
             missing_early = bool(use_txn_balances and start_date
                                  and earliest and start_date < earliest)
             deriv = "account_summary.balance (credit-card debt)"
             if cf:
-                deriv += (f" — carried forward; statement ends {last_stmt}, "
+                deriv += (f" — carried forward; data ends {latest}, "
                           f"before window end {end_date}")
             if missing_early:
                 deriv += (f" — card transactions before {earliest} missing; "
                           f"earliest covered date after window start {start_date}")
             _add(ccy, inst, acc, at, "Liability", abs(bal), deriv,
                  carried_forward=cf, period_to=last_stmt,
-                 missing_early=missing_early, earliest_covered=earliest)
+                 missing_early=missing_early, earliest_covered=earliest,
+                 latest_covered=latest)
         elif at in _FD_ACCOUNT_TYPES:
             _add(ccy, inst, acc, at, "Time Deposit", bal, "account_summary.balance")
         elif at in _NON_CASH_ACCOUNT_TYPES:
