@@ -20,12 +20,12 @@ from typing import Any
 
 from pfa_analysis.analyze import (
     _analyze_file,
-    _internal_transfer_ids,
     build_fx_drilldown,
     build_income_expense_drilldowns,
     build_transfer_drilldown,
     parse_date_to_iso,
 )
+from pfa_analysis.categorize import UNCATEGORIZED
 from pfa_fx import fetch_fx_rates
 from pfa_analysis.dashboard import build_dashboard_json
 from pfa_analysis.render_md import render_report
@@ -160,22 +160,31 @@ def render_consolidated_report(
 
     # Build categorization summary from drilldown data.
     cat_summary: list[dict[str, Any]] = []
-    total_cat = 0
+    total_categorized = 0
+    total_classifiable = 0
     for entry in income_drill:
         cnt = len(entry.get("transactions", []))
-        total_cat += cnt
+        total_classifiable += cnt
+        if entry["source"] != UNCATEGORIZED:
+            total_categorized += cnt
         cat_summary.append({"class": "Income", "category": entry["source"], "count": cnt})
     for entry in expense_drill:
         cnt = len(entry.get("transactions", []))
-        total_cat += cnt
+        total_classifiable += cnt
+        if entry["category"] != UNCATEGORIZED:
+            total_categorized += cnt
         cat_summary.append({"class": "Expense", "category": entry["category"], "count": cnt})
     for entry in transfer_drill:
         cnt = len(entry.get("transactions", []))
-        total_cat += cnt
+        total_classifiable += cnt
+        if entry["category"] != UNCATEGORIZED:
+            total_categorized += cnt
         cat_summary.append({"class": "Transfer", "category": entry["category"], "count": cnt})
-    # Count internal transfers (excluded from drilldowns but present in IR).
-    total_txns = total_cat + len(_internal_transfer_ids(consolidated_path, start_date, end_date))
-    cat_coverage = (total_cat / total_txns * 100) if total_txns else 0.0
+    # Coverage = transactions that got a real (non-Uncategorized) category among
+    # all transactions requiring one (the income/expense/transfer drilldowns).
+    # Internal transfers and currency conversions are excluded by design and do
+    # not count against coverage.
+    cat_coverage = (total_categorized / total_classifiable * 100) if total_classifiable else 0.0
 
     return render_report(
         result,

@@ -489,7 +489,7 @@ def print_summary(txns: list[TxnRow], result: dict[str, str], *, default_categor
     }
 
     n_total = len(txns)
-    n_un = cat_counts.get("Income:Other", 0) + cat_counts.get("Expense:Other", 0)
+    n_un = cat_counts.get(INCOME_UNCATEGORIZED, 0) + cat_counts.get(EXPENSE_UNCATEGORIZED, 0)
     n_categorized = n_total - n_un
 
     print()
@@ -534,7 +534,7 @@ def print_summary(txns: list[TxnRow], result: dict[str, str], *, default_categor
 
     print(f"\n---")
     if n_un:
-        print(f"  {'Other (fallback):':30s} {n_un:>5d}")
+        print(f"  {f'{UNCATEGORIZED} (fallback):':30s} {n_un:>5d}")
     coverage = n_categorized / n_total * 100 if n_total else 0
     print(f"  {'Coverage:':30s} {coverage:>5.1f}%")
     print(f"  {'Total transactions:':30s} {n_total:>5d}")
