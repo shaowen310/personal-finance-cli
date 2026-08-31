@@ -107,10 +107,12 @@ rules:
       - DON DON DONKI
       - SCARLETT
       - 7-ELEVEN
+      - SEVEN-ELEVEN
       - GUSTO
       - SHENG SIONG
       - GIANT
       - FRESH FRUITS
+      - MITSUKOSHI
 
   # =========================================================================
   # 3. Dining — restaurants, cafes, food courts, bakeries, delivery
@@ -131,12 +133,15 @@ rules:
       - GUZMAN
       - MODUAMY
       - RAMEN
+      - IPPUDO
+      - COCO ICHIBANYA
       # Cafes & bubble tea
       - STARBUCKS
       - KOI
       - MIXUE
       - COMPOSE COFFEE
       - NYLON COFFEE
+      - TULLYS COFFEE
       - THE DAILY CUT
       - TOMOCAFE
       # Food courts / hawker
@@ -144,6 +149,7 @@ rules:
       - KOPITIAM
       - KOUFU
       - FR JWL
+      - FOOD ARENA
       # Bakeries
       - SWEE HENG
       # Chicken / soup / speciality
@@ -177,6 +183,13 @@ rules:
       # Apparel / accessories
       - HUSH PUPPIES
       - NATURALPROJECT
+      - UNIQLO
+      - HANDS
+      - ISSEY MIYAKE
+      # Souvenirs
+      - BACHA COFFEE
+      # Cosmetics / perfumes
+      - RU RABO
 
   # =========================================================================
   # 5. Travel — flights, hotels, OTAs, travel activities
@@ -250,8 +263,7 @@ rules:
       - ADMIN FEE
       - MONTHLY FEE
       - CCY CONVERSION FEE
-      - MISC DEBIT
-      - MISC DR
+      - OD INT CHARGE
 
   # =========================================================================
   # 9a. Tax — IRAS income tax, GIRO tax deductions
@@ -297,6 +309,8 @@ rules:
       - TAXI
       - COMFORT
       - GOJEK
+      - GRABPAY
+      - GRAB MAKATI
 
   # =========================================================================
   # 12. Utilities — electricity, water, telco, town council
