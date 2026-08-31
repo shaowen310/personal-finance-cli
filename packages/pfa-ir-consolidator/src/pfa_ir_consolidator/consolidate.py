@@ -436,8 +436,8 @@ def main() -> None:
     cc_detected = transfers.get("currency_conversion_detected", 0)
     cc_payments_detected = transfers.get("cc_payments_detected", 0)
     inv_detected = transfers.get("investment_detected", 0)
-    inv_single = transfers.get("investment_single_leg_detected", 0)
-    inv_total = inv_detected + inv_single
+    inv_synth = transfers.get("investment_synthesized", 0)
+    inv_total = inv_detected + inv_synth
 
     out = Path(args.out)
     _ = out.write_text(consolidated.to_json(indent=args.indent), encoding="utf-8")
@@ -456,11 +456,7 @@ def main() -> None:
     if cc_payments_detected:
         print(f"  cc_payments={cc_payments_detected} pairs")
     if inv_total:
-        print(f"  internal_investment={inv_total}")
-    if inv_detected:
-        print(f"  internal_investment_pairs={inv_detected}")
-    if inv_single:
-        print(f"  internal_investment_single_leg={inv_single}")
+        print(f"  investment_transfers={inv_total} pairs")
 
 
 if __name__ == "__main__":

@@ -760,7 +760,7 @@ def detect_investment_transfers(statement: Any) -> Any:
     cons = dict(extras.get("consolidation", {}) or {})
     transfers_extras = dict(cons.get("transfers", {}) or {})
     transfers_extras["investment_detected"] = matched
-    transfers_extras["investment_single_leg_detected"] = matched_single
+    transfers_extras["investment_synthesized"] = matched_single
     cons["transfers"] = transfers_extras
     extras["consolidation"] = cons
     statement.extras = extras
