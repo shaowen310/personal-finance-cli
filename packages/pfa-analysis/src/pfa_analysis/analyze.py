@@ -184,6 +184,8 @@ def _load_consolidated_ir(data: dict[str, Any], path: Path,
                 "amount": float(t.get("amount", 0.0)),
                 "currency": str(t.get("currency", acct_ccy)),
                 "account_type": acct_type,
+                "account": acct.get("account_no", ""),
+                "institution": acct.get("institution", ""),
                 "is_internal_transfer": is_internal,
                 "balance_after": parse_num(t.get("balance_after")),
                 "txn_id": str(t.get("txn_id", "") or ""),
@@ -416,12 +418,13 @@ def compute_metrics(txns: list[Txn], meta: dict[str, Any], ccy: str,
 
 
 def build_assets(meta: dict[str, Any],
-                  cc_balances: dict[str, float] | None = None) -> dict[str, dict[str, float]]:
+                  cc_balances: dict[str, float] | None = None,
+                  use_txn_balances: bool = False) -> dict[str, dict[str, float]]:
     """Assemble balance-sheet assets: cash, time deposits, investments (per currency).
 
     Credit-card balances are treated as liabilities (deducted from net worth).
-    *cc_balances* is a ``{ccy: balance}`` dict derived from the last
-    ``balance_after`` on credit-card transactions.
+    *cc_balances* is a ``{account_no: balance}`` dict (per credit-card account)
+    derived from the cutoff-aware ``balance_after`` on each card's transactions.
 
     Every supported IR carries ``accounts[]``; :func:`_build_meta` derives
     ``account_summary`` from them, so the cash/liability balances always come
@@ -431,18 +434,31 @@ def build_assets(meta: dict[str, Any],
     cash: dict[str, float] = defaultdict(float)
     liabilities: dict[str, float] = defaultdict(float)
     _NON_CASH = _NON_CASH_ACCOUNT_TYPES
+    # Per-account credit-card liability: (currency, value). Start from the
+    # statement closing_balance, then override per account with the cutoff-aware
+    # balance_after when a date window is applied (so overlapping *and*
+    # non-overlapping CC statement periods both reconcile with the drill-down,
+    # and two cards in the same currency stay distinct).
+    liab_detail: dict[str, tuple[str, float]] = {}
     for a in meta.get("account_summary") or []:
         at = str(a.get("account_type", "")).lower()
-        if at in _NON_CASH or at in _LIABILITY_ACCOUNT_TYPES:
-            continue
         c = a.get("currency")
         b = parse_num(a.get("closing_balance"))
+        if at in _LIABILITY_ACCOUNT_TYPES:
+            acc_no = a.get("account_no", "")
+            if c and b is not None:
+                liab_detail[acc_no] = (c, abs(b))
+            continue
+        if at in _NON_CASH:
+            continue
         if c and b is not None:
             cash[c] += b
-    if cc_balances:
-        for ccy, bal in cc_balances.items():
-            if bal > 0:
-                liabilities[ccy] += bal
+    if use_txn_balances and cc_balances:
+        for acc_no, bal in cc_balances.items():
+            if bal > 0 and acc_no in liab_detail:
+                liab_detail[acc_no] = (liab_detail[acc_no][0], bal)
+    for c, v in liab_detail.values():
+        liabilities[c] += v
 
     time_dep: dict[str, float] = defaultdict(float)
     for td in meta.get("extras", {}).get("time_deposits", []):
@@ -469,13 +485,15 @@ def build_assets(meta: dict[str, Any],
 
 
 def _assert_drilldown_reconciles(assets: dict[str, dict[str, float]],
-                                  drilldown: list[dict[str, Any]]) -> None:
-    """Assert that drill-down subtotals match the Balance Sheet totals.
+                                  drilldown: list[dict[str, Any]]) -> list[str]:
+    """Check that drill-down subtotals match the Balance Sheet totals.
 
     Compares per-currency, per-bucket sums from the drill-down rows against
-    the corresponding values in *assets*. Raises ``AssertionError`` with a
-    descriptive message on mismatch — this catches double-counting bugs in
-    ``build_assets`` and schema drift between the two code paths.
+    the corresponding values in *assets*. Historically this raised an
+    ``AssertionError`` on mismatch (catching double-counting bugs in
+    ``build_assets`` and schema drift between the two code paths). It now
+    returns a list of human-readable warning strings instead, so a mismatch
+    is surfaced in the report rather than aborting the analysis run.
     """
     _BUCKET_MAP = {
         "Cash": "cash",
@@ -491,6 +509,7 @@ def _assert_drilldown_reconciles(assets: dict[str, dict[str, float]],
         if bucket in _BUCKET_MAP:
             dd_totals[_BUCKET_MAP[bucket]][ccy] += val
 
+    warnings: list[str] = []
     for asset_key in ("cash", "time_deposits", "investments", "liabilities"):
         asset_by_ccy = assets.get(asset_key, {})
         dd_by_ccy = dd_totals.get(asset_key, {})
@@ -498,15 +517,19 @@ def _assert_drilldown_reconciles(assets: dict[str, dict[str, float]],
         for ccy in all_ccies:
             asset_val = asset_by_ccy.get(ccy, 0.0)
             dd_val = dd_by_ccy.get(ccy, 0.0)
-            assert abs(asset_val - dd_val) < 0.005, (
-                f"Balance Sheet / drill-down mismatch for {asset_key} {ccy}: "
-                f"Balance Sheet={asset_val:.2f}, Drill-Down={dd_val:.2f}"
-            )
+            if abs(asset_val - dd_val) >= 0.005:
+                warnings.append(
+                    f"Balance Sheet / drill-down mismatch for {asset_key} {ccy}: "
+                    f"Balance Sheet={asset_val:.2f}, Drill-Down={dd_val:.2f}"
+                )
+    return warnings
 
 
 def build_balance_sheet_drilldown(raw: dict[str, Any],
                                   cc_balances: dict[str, float] | None = None,
-                                  use_txn_balances: bool = False) -> list[dict[str, Any]]:
+                                  use_txn_balances: bool = False,
+                                  start_date: str | None = None,
+                                  end_date: str | None = None) -> list[dict[str, Any]]:
     """Account-level breakdown that feeds the Balance Sheet Drill-Down section.
 
     Mirrors the bucket assignment in :func:`build_assets` exactly so the
@@ -522,11 +545,16 @@ def build_balance_sheet_drilldown(raw: dict[str, Any],
     rows: list[dict[str, Any]] = []
 
     def _add(ccy: str, inst: str, acc: str, at: str, bucket: str,
-             value: float, deriv: str) -> None:
+             value: float, deriv: str, carried_forward: bool = False,
+             period_to: str | None = None,
+             missing_early: bool = False,
+             earliest_covered: str | None = None) -> None:
         rows.append({
             "currency": ccy, "institution": inst, "account_no": acc,
             "account_type": at, "bucket": bucket, "native_value": value,
-            "derivation": deriv,
+            "derivation": deriv, "carried_forward": carried_forward,
+            "period_to": period_to, "missing_early": missing_early,
+            "earliest_covered": earliest_covered,
         })
 
     # ---- Consolidated IR (accounts[] with closing_balance / fd_records / holdings)
@@ -539,16 +567,50 @@ def build_balance_sheet_drilldown(raw: dict[str, Any],
             acc = acct.get("account_no", "")
             cb = parse_num(acct.get("closing_balance"))
             if at in _LIABILITY_ACCOUNT_TYPES:
-                if use_txn_balances and cc_balances:
-                    # Use the cutoff-aware balance_after, matching build_assets.
-                    bal = cc_balances.get(ccy)
-                    if bal is not None:
-                        _add(ccy, inst, acc, at, "Liability", bal,
-                             "balance_after as of cutoff (credit-card debt)")
-                        continue
-                if cb is not None:
-                    _add(ccy, inst, acc, at, "Liability", abs(cb),
-                         "account closing_balance (credit-card debt)")
+                # Stale / carried forward = the card's statement period ends before
+                # the report-window end. Whatever balance we show (cutoff
+                # balance_after or closing balance) is then NOT the position as of
+                # the window end — even if the card has transactions inside the
+                # window. Flag it so the reader knows the liability is approximate.
+                last_stmt = acct.get("period_to")
+                cf = bool(use_txn_balances and end_date and last_stmt and last_stmt < end_date)
+                # Missing-early = the card's earliest covered transaction is AFTER the
+                # window start, i.e. card activity in [start_date, earliest) is not in
+                # this report at all (it lives in a prior statement we don't have).
+                # period_from is often empty in consolidated IR, so derive the earliest
+                # covered date from the transaction posted_dates (fall back to period_from).
+                cc_txns = acct.get("transactions") or []
+                earliest = None
+                if cc_txns:
+                    dts = [t.get("posted_date") for t in cc_txns if t.get("posted_date")]
+                    if dts:
+                        earliest = min(dts)
+                earliest = earliest or acct.get("period_from")
+                missing_early = bool(use_txn_balances and start_date
+                                     and earliest and start_date < earliest)
+                cutoff_bal = cc_balances.get(acc) if (use_txn_balances and cc_balances) else None
+                if cutoff_bal is not None:
+                    deriv = "balance_after as of cutoff (credit-card debt)"
+                    if cf:
+                        deriv += (f" — carried forward; statement ends {last_stmt}, "
+                                  f"before window end {end_date}")
+                    if missing_early:
+                        deriv += (f" — card transactions before {earliest} missing; "
+                                  f"earliest covered date after window start {start_date}")
+                    _add(ccy, inst, acc, at, "Liability", cutoff_bal, deriv,
+                         carried_forward=cf, period_to=last_stmt,
+                         missing_early=missing_early, earliest_covered=earliest)
+                elif cb is not None:
+                    deriv = "account closing_balance (credit-card debt)"
+                    if cf:
+                        deriv += (f" — carried forward; statement ends {last_stmt}, "
+                                  f"before window end {end_date}")
+                    if missing_early:
+                        deriv += (f" — card transactions before {earliest} missing; "
+                                  f"earliest covered date after window start {start_date}")
+                    _add(ccy, inst, acc, at, "Liability", abs(cb), deriv,
+                         carried_forward=cf, period_to=last_stmt,
+                         missing_early=missing_early, earliest_covered=earliest)
                 else:
                     _add(ccy, inst, acc, at, "Dropped", 0.0,
                          "DROPPED: credit_card closing_balance is null")
@@ -586,7 +648,27 @@ def build_balance_sheet_drilldown(raw: dict[str, Any],
         acc = a.get("account_no", "")
         bal = parse_num(a.get("closing_balance")) or 0.0
         if at in _LIABILITY_ACCOUNT_TYPES:
-            _add(ccy, inst, acc, at, "Liability", abs(bal), "account_summary.balance (credit-card debt)")
+            last_stmt = a.get("period_to")
+            cf = bool(use_txn_balances and end_date and last_stmt and last_stmt < end_date)
+            cc_txns = a.get("transactions") or []
+            earliest = None
+            if cc_txns:
+                dts = [t.get("posted_date") for t in cc_txns if t.get("posted_date")]
+                if dts:
+                    earliest = min(dts)
+            earliest = earliest or a.get("period_from")
+            missing_early = bool(use_txn_balances and start_date
+                                 and earliest and start_date < earliest)
+            deriv = "account_summary.balance (credit-card debt)"
+            if cf:
+                deriv += (f" — carried forward; statement ends {last_stmt}, "
+                          f"before window end {end_date}")
+            if missing_early:
+                deriv += (f" — card transactions before {earliest} missing; "
+                          f"earliest covered date after window start {start_date}")
+            _add(ccy, inst, acc, at, "Liability", abs(bal), deriv,
+                 carried_forward=cf, period_to=last_stmt,
+                 missing_early=missing_early, earliest_covered=earliest)
         elif at in _FD_ACCOUNT_TYPES:
             _add(ccy, inst, acc, at, "Time Deposit", bal, "account_summary.balance")
         elif at in _NON_CASH_ACCOUNT_TYPES:
@@ -619,13 +701,16 @@ def _analyze_file(path: Path,
     use_txn_balances = bool(start_date or end_date)
     return _analyze_consolidated(raw, meta, txns, path,
                                  use_txn_balances=use_txn_balances,
-                                 txn_categories=txn_categories)
+                                 txn_categories=txn_categories,
+                                 start_date=start_date, end_date=end_date)
 
 
 def _analyze_consolidated(raw: dict[str, Any], meta: dict[str, Any],
                           txns: list[Txn], path: Path,
                           use_txn_balances: bool = False,
-                          txn_categories: dict[str, str] | None = None) -> dict[str, Any]:
+                          txn_categories: dict[str, str] | None = None,
+                          start_date: str | None = None,
+                          end_date: str | None = None) -> dict[str, Any]:
     """Consolidated IR: opening/closing come from account balances, not txns.
 
     When ``use_txn_balances`` is True (e.g. transactions have been filtered by
@@ -659,18 +744,22 @@ def _analyze_consolidated(raw: dict[str, Any], meta: dict[str, Any],
     # (reflects the filtered window), otherwise fall back to
     # account_summary (handles consolidated IRs with overlapping data).
     cc_balances: dict[str, float] = {}
-    # Walk txns in reverse date order to pick the latest balance_after.
+    # Walk txns in reverse date order to pick, per credit-card account, the
+    # latest balance_after within the window (cutoff-aware liability). Keyed by
+    # account_no so multiple cards in the same currency stay distinct.
     cc_txns = sorted(
         (t for t in txns if str(t.get("account_type", "")).lower() in _LIABILITY_ACCOUNT_TYPES),
         key=lambda t: t["date"], reverse=True,
     )
     for t in cc_txns:
-        ccy = t["currency"]
-        if ccy in cc_balances:
+        acc = t.get("account")
+        if not acc:
+            continue
+        if acc in cc_balances:
             continue
         bal = t.get("balance_after")
         if bal is not None and bal > 0:
-            cc_balances[ccy] = bal
+            cc_balances[acc] = bal
 
     metrics_by_ccy: dict[str, dict[str, Any]] = {}
     for ccy, lst in by_ccy.items():
@@ -684,13 +773,16 @@ def _analyze_consolidated(raw: dict[str, Any], meta: dict[str, Any],
             txn_categories=txn_categories,
         )
 
-    assets = build_assets(meta, cc_balances=cc_balances)
+    assets = build_assets(meta, cc_balances=cc_balances,
+                         use_txn_balances=use_txn_balances)
     drilldown = build_balance_sheet_drilldown(raw, cc_balances=cc_balances,
-                                             use_txn_balances=use_txn_balances)
-    _assert_drilldown_reconciles(assets, drilldown)
+                                             use_txn_balances=use_txn_balances,
+                                             start_date=start_date, end_date=end_date)
+    reconcile_warnings = _assert_drilldown_reconciles(assets, drilldown)
     return {
         "meta": meta, "metrics_by_ccy": metrics_by_ccy, "assets": assets,
         "drilldown": drilldown, "has_txns": bool(txns), "source": path.name,
+        "warnings": reconcile_warnings,
     }
 
 

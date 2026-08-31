@@ -159,7 +159,8 @@ def render_report(result: dict[str, Any], consolidated: bool = False,
                   transfer_drilldown: list[dict[str, Any]] | None = None,
                   fx_gain_loss: dict[str, Any] | None = None,
                   cat_summary: list[dict[str, Any]] | None = None,
-                  cat_coverage: float | None = None) -> str:
+                  cat_coverage: float | None = None,
+                  warnings: list[str] | None = None) -> str:
     """Render a balance-sheet + cash-flow Markdown report.
 
     Args:
@@ -174,6 +175,11 @@ def render_report(result: dict[str, Any], consolidated: bool = False,
     assets = result["assets"]
     use_fx = consolidated and fx_rates is not None
     out: list[str] = []
+    # Warnings surfaced in the top "## 0. Warnings" section. Reconciliation
+    # warnings come from the analysis result; the section-specific warnings
+    # (internal-transfer imbalance, credit-card caveats) are appended below as
+    # they are detected, so they appear both here and in their detailed section.
+    report_warnings: list[str] = list(warnings or [])
 
     # ---- Title ---------------------------------------------------------------
     title = "Consolidated Balance Sheet & Funds Flow" if consolidated else "Personal Balance Sheet & Funds Flow"
@@ -824,14 +830,55 @@ def render_report(result: dict[str, Any], consolidated: bool = False,
             + "(FX rates unavailable or not a consolidated report). The Total row sums per currency "
             + "and is not a real net value.\n"
         )
-    out.append(
-        "- This is an initial automated pass. Transfer vs expense classification and asset "
-        + "coverage (e.g. ICBC fixed-deposit rollovers) may need tuning \u2014 refine from here.\n"
-    )
     if internal_imbalance:
-        out.append(
-            f"- **⚠ Internal transfers did not net to zero** "
+        report_warnings.append(
+            f"Internal transfers did not net to zero "
             f"({', '.join(f'{c} {fmt(v)}' for c, v in sorted(internal_imbalance.items()))}). "
-            "A missing/unpaired leg was detected \u2014 see \u00a7Internal Transfers.\n"
+            "A missing/unpaired leg was detected \u2014 see \u00a7Internal Transfers."
         )
+    # Carried-forward credit-card liabilities: a card whose statement period
+    # falls outside the report window is shown at its last known closing balance,
+    # which is not the true period-end position (e.g. a bill payment to the card
+    # inside the window is recorded on the paying account only).
+    cf_liab_rows: list[dict[str, Any]] = []
+    for r in (drilldown or []):
+        if r.get("carried_forward"):
+            cf_liab_rows.append(r)
+    if cf_liab_rows:
+        detail = "; ".join(
+            f"{r['institution']} {r['account_no']} "
+            f"(stmt ends {r.get('period_to') or 'n/a'}, {r['currency']} {fmt(r['native_value'])})"
+            for r in cf_liab_rows
+        )
+        report_warnings.append(
+            "Credit-card balance carried forward: " + detail + " \u2014 statement period ends "
+            "before the report-window end, so the reported balance is not the position as of "
+            "the window end. Verify against the latest statement."
+        )
+
+    me_liab_rows: list[dict[str, Any]] = []
+    for r in (drilldown or []):
+        if r.get("missing_early"):
+            me_liab_rows.append(r)
+    if me_liab_rows:
+        detail = "; ".join(
+            f"{r['institution']} {r['account_no']} "
+            f"(earliest txn {r.get('earliest_covered') or 'n/a'}, "
+            f"{r['currency']} {fmt(r['native_value'])})"
+            for r in me_liab_rows
+        )
+        report_warnings.append(
+            "Credit-card transactions may be missing: " + detail + " \u2014 earliest covered "
+            "transaction is after the report-window start; activity before it is not in this "
+            "report. Verify against the full statement."
+        )
+
+    # ---- 0. Warnings (prominent summary near the top) -----------------------
+    if report_warnings:
+        _warn_block = ["## ⚠ Warnings\n"]
+        for w in report_warnings:
+            _warn_block.append(f"- **\u26a0 {w}**\n")
+        _warn_block.append("\n")
+        # Insert right after the top divider so all warnings are seen first.
+        out.insert(out.index("---\n") + 1, "".join(_warn_block))
     return "\n".join(out)

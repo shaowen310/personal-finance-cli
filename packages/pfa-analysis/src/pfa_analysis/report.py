@@ -197,6 +197,7 @@ def render_consolidated_report(
         fx_gain_loss=fx_gain_loss,
         cat_summary=cat_summary if cat_summary else None,
         cat_coverage=cat_coverage,
+        warnings=result.get("warnings"),
     )
 
 
