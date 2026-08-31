@@ -811,11 +811,8 @@ def render_report(result: dict[str, Any], consolidated: bool = False,
     # ---- 6. Notes & Caveats --------------------------------------------------
     out.append("## " + ("6" if use_fx else "5") + ". Notes & Caveats\n")
     out.append(
-        "- Balance sheet + funds flow only; merchant-level spending categorization is out of scope.\n"
-    )
-    out.append(
-        "- Transfers (own-account / fixed-deposit moves) are separated from Income/Expense. "
-        + "Detection uses `is_internal_transfer` when present, else `TRANSFER_KEYWORDS`.\n"
+        "- Internal Transfers (own-account / fixed-deposit moves) are separated from Income/Expense. "
+        + "Detection uses `is_internal_transfer`.\n"
     )
     if use_fx:
         assert fx_rates is not None  # guaranteed by use_fx
