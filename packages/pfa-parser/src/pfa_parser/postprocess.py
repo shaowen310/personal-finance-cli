@@ -22,12 +22,13 @@ from pfa_ir_schema.relations import (
     REL_FD_PRINCIPAL,
 )
 # Statement-level verification passes (verify_fd_interest_amounts, verify_account_balances,
-# verify_account_balances, verify_txn_links) live in pfa-ir-verifier (the canonical
+# verify_statement_meta, verify_txn_links) live in pfa-ir-verifier (the canonical
 # home for IR verification); re-use them here. FD<->CA *linking* (link_fd_to_ca) is
 # still defined locally below, not in the verifier.
 from pfa_ir_verifier import (
     verify_account_balances,
     verify_fd_interest_amounts,
+    verify_statement_meta,
     verify_txn_links,
 )
 
@@ -510,28 +511,6 @@ def fill_account_balances(statement: ParsedStatement) -> ParsedStatement:
             elif acct.closing_balance is not None and acct.opening_balance is None:
                 acct.opening_balance = acct.closing_balance
 
-    return statement
-
-
-def verify_statement_meta(statement: ParsedStatement) -> ParsedStatement:
-    """Verify that ``statement_meta.institution`` is present and non-empty.
-
-    Without an institution the IR cannot identify the source bank, which breaks
-    downstream consolidation (accounts are grouped by institution) and the
-    renderer registry lookup.
-
-    Idempotent: an already-present warning is not re-appended.
-
-    Mutates and returns *statement*.
-    """
-    meta = statement.statement_meta
-    if not meta.institution or not meta.institution.strip():
-        warn = (
-            "statement_meta.institution is missing or empty — "
-            "extractors must set the bank name (e.g. 'DBS', 'OCBC', 'UOB', 'ICBC')"
-        )
-        if warn not in statement.warnings:
-            statement.warnings.append(warn)
     return statement
 
 

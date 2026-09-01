@@ -20,6 +20,8 @@ Public API
   (closing vs opening + Σtxns, and vs last ``balance_after``).
 * :func:`verify_fd_interest_amounts` — per-FD interest-amount check that
   delegates to :func:`_fd_interest_mismatch` for every ``fd_record``.
+* :func:`verify_statement_meta` — required-metadata completeness check
+  (``statement_meta.institution`` must be present and non-empty).
 * :func:`verify_ir` — convenience loader + full check for a JSON file or
   ``ParsedStatement`` (links + internal-transfer reconciliation).
 """
@@ -665,4 +667,26 @@ def verify_fd_interest_amounts(statement: ParsedStatement) -> ParsedStatement:
             )
             if warn and warn not in statement.warnings:
                 statement.warnings.append(warn)
+    return statement
+
+
+def verify_statement_meta(statement: ParsedStatement) -> ParsedStatement:
+    """Verify that ``statement_meta.institution`` is present and non-empty.
+
+    Without an institution the IR cannot identify the source bank, which breaks
+    downstream consolidation (accounts are grouped by institution) and the
+    renderer registry lookup.
+
+    Idempotent: an already-present warning is not re-appended.
+
+    Mutates and returns *statement*.
+    """
+    meta = statement.statement_meta
+    if not meta.institution or not meta.institution.strip():
+        warn = (
+            "statement_meta.institution is missing or empty — "
+            "extractors must set the bank name (e.g. 'DBS', 'OCBC', 'UOB', 'ICBC')"
+        )
+        if warn not in statement.warnings:
+            statement.warnings.append(warn)
     return statement

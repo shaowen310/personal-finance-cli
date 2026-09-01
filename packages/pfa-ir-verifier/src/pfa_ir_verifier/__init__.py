@@ -9,6 +9,7 @@ from .verify import (
     verify_account_balances,
     verify_fd_interest_amounts,
     verify_ir,
+    verify_statement_meta,
     verify_txn_links,
 )
 
@@ -21,5 +22,6 @@ __all__ = [
     "verify_account_balances",
     "verify_fd_interest_amounts",
     "verify_ir",
+    "verify_statement_meta",
     "verify_txn_links",
 ]
