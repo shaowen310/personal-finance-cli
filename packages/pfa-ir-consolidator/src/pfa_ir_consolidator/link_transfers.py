@@ -1,4 +1,4 @@
-"""detect_transfers.py — detect and link inter-bank and intra-bank transfers.
+"""link_transfers.py — link inter-bank and intra-bank transfers.
 
 After consolidating IRs from multiple banks, these passes scan for transaction
 pairs where money moved between accounts:
@@ -24,7 +24,7 @@ pairs where money moved between accounts:
 These are internal transfers that should be flagged to avoid double-counting in
 net-worth calculations.
 
-Detection rules (all must hold):
+Linking rules (all must hold):
   1. Same ``posted_date``
   2. Opposite amounts: ``abs(A.amount + B.amount) < 1e-2``
      (not required for currency conversions — amounts differ by exchange rate)
@@ -101,8 +101,8 @@ def _acct_type_abbr(account_type: str) -> str:
     return _ACCOUNT_TYPE_ABBR.get(key, (key or "?").upper()[:2])
 
 
-def detect_inter_bank_transfers(statement: Any) -> Any:
-    """Detect and link inter-bank internal-transfer transaction pairs.
+def link_inter_bank_transfers(statement: Any) -> Any:
+    """Link inter-bank internal-transfer transaction pairs.
 
     Mutates and returns *statement*. Idempotent (skips already-linked txns).
 
@@ -234,8 +234,8 @@ def _cross_link(
             txn_b.link_labels = list(txn_b.link_labels) + [lbl]
 
 
-def detect_intra_bank_transfers(statement: Any) -> Any:
-    """Detect and link intra-bank current-account transfer transaction pairs.
+def link_intra_bank_transfers(statement: Any) -> Any:
+    """Link intra-bank current-account transfer transaction pairs.
 
     In a consolidated statement, a transfer between two current accounts at
     the **same** bank (e.g. DBS Savings → DBS Current) appears twice — once
@@ -243,7 +243,7 @@ def detect_intra_bank_transfers(statement: Any) -> Any:
     those matched pairs, marks both as ``is_internal_transfer``, cross-links
     ``linked_txn_ids``, and labels them ``"intra_bank"``.
 
-    Detection rules (all must hold):
+    Linking rules (all must hold):
       1. Same institution (intra-bank)
       2. Different current accounts (``account_type == "current"``)
       3. Same ``posted_date``
@@ -376,8 +376,8 @@ def _extract_cc_ref_id(description: str) -> str | None:
     return match.group(0) if match else None
 
 
-def detect_currency_conversions(statement: Any) -> Any:
-    """Detect and link in-house currency-conversion transaction pairs.
+def link_currency_conversions(statement: Any) -> Any:
+    """Link in-house currency-conversion transaction pairs.
 
     When a multi-currency account at a bank performs a currency exchange (e.g.
     UOB One Account SGD → FX+ JPY), the statement prints one row per currency
@@ -390,7 +390,7 @@ def detect_currency_conversions(statement: Any) -> Any:
     Conversion"`` and end with the same numeric reference ID (e.g.
     ``2606120664556908``).
 
-    Detection rules (all must hold):
+    Linking rules (all must hold):
       1. Both descriptions match ``Currency Conversion`` (case-insensitive).
       2. Both share the same numeric reference ID extracted from the
          description.
@@ -477,8 +477,8 @@ def detect_currency_conversions(statement: Any) -> Any:
     return statement
 
 
-def detect_cc_payments(statement: Any) -> Any:
-    """Detect and link credit card payments from current accounts to credit card
+def link_cc_payments(statement: Any) -> Any:
+    """Link credit card payments from current accounts to credit card
     transactions at the same bank.
 
     When a current account makes a credit card payment (e.g. DBS Current Account
@@ -486,7 +486,7 @@ def detect_cc_payments(statement: Any) -> Any:
     current account side and a corresponding credit on the credit card side, both
     posted on the same date with opposite amounts.
 
-    Detection rules (all must hold):
+    Linking rules (all must hold):
       1. Same institution
       2. One ``current`` account + one ``credit_card`` account
       3. Same ``posted_date``
@@ -655,8 +655,8 @@ def _add_investment_writeoff(statement: Any, asset_txn: Any, ref_inv: set[str]) 
     return True
 
 
-def detect_investment_transfers(statement: Any) -> Any:
-    """Detect transfers from an asset account into one of the user's own
+def link_investment_transfers(statement: Any) -> Any:
+    """Link transfers from an asset account into one of the user's own
     investment accounts (SRS / Unit Trust / Fixed Deposit) and tag them internal.
 
     Mirrors the other transfer passes but, unlike them, a transfer into an own

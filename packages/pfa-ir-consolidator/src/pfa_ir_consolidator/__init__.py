@@ -3,21 +3,21 @@ from .consolidate import (
     embed_fx_rates,
     main,
 )
-from .detect_transfers import (
-    detect_cc_payments,
-    detect_currency_conversions,
-    detect_inter_bank_transfers,
-    detect_intra_bank_transfers,
-    detect_investment_transfers,
+from .link_transfers import (
+    link_cc_payments,
+    link_currency_conversions,
+    link_inter_bank_transfers,
+    link_intra_bank_transfers,
+    link_investment_transfers,
 )
 
 __all__ = [
     "consolidate_statements",
     "embed_fx_rates",
     "main",
-    "detect_inter_bank_transfers",
-    "detect_intra_bank_transfers",
-    "detect_currency_conversions",
-    "detect_cc_payments",
-    "detect_investment_transfers",
+    "link_inter_bank_transfers",
+    "link_intra_bank_transfers",
+    "link_currency_conversions",
+    "link_cc_payments",
+    "link_investment_transfers",
 ]

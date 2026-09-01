@@ -23,12 +23,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from pfa_ir_schema import from_json, Account, ParserInfo, StatementMeta, ParsedStatement  # noqa: E402
 
-from pfa_ir_consolidator.detect_transfers import (  # noqa: E402
-    detect_cc_payments,
-    detect_currency_conversions,
-    detect_inter_bank_transfers,
-    detect_intra_bank_transfers,
-    detect_investment_transfers,
+from pfa_ir_consolidator.link_transfers import (  # noqa: E402
+    link_cc_payments,
+    link_currency_conversions,
+    link_inter_bank_transfers,
+    link_intra_bank_transfers,
+    link_investment_transfers,
 )
 # Internal-transfer verification (promotion, link integrity, orphan reconcile)
 # now lives in pfa-ir-verifier — the canonical home for all IR verification.
@@ -315,7 +315,7 @@ def consolidate_statements(
         },
     )
 
-    # Ordered internal-transfer verification pipeline (runs after detect_transfers
+    # Ordered internal-transfer verification pipeline (runs after link_transfers
     # + the promotion post-pass above, all on the consolidated IR):
     #   1. promote_internal_transfers  -- recover unlinked own-account pairs (done on merged_accounts above; == consolidated.accounts)
     #   2. verify_txn_links           -- link-integrity check on the finalized IR (promoted pairs are cross-linked, so not falsely orphaned)
@@ -415,11 +415,11 @@ def main() -> None:
     consolidated, total_in, deduped, filtered = consolidate_statements(
         stmts_with_paths, do_dedup=not args.no_dedup
     )
-    consolidated = detect_inter_bank_transfers(consolidated)
-    consolidated = detect_intra_bank_transfers(consolidated)
-    consolidated = detect_currency_conversions(consolidated)
-    consolidated = detect_cc_payments(consolidated)
-    consolidated = detect_investment_transfers(consolidated)
+    consolidated = link_inter_bank_transfers(consolidated)
+    consolidated = link_intra_bank_transfers(consolidated)
+    consolidated = link_currency_conversions(consolidated)
+    consolidated = link_cc_payments(consolidated)
+    consolidated = link_investment_transfers(consolidated)
 
     from pfa_parser.postprocess import verify_txn_links
     consolidated = verify_txn_links(consolidated)

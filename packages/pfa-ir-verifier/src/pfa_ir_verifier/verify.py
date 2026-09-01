@@ -281,7 +281,7 @@ def demote_orphan_internal_transfers(
     for t in txns:
         if _is_liability_settlement(t, own_liability_digits):
             orphan_keys.discard(_orphan_key(t))
-    # Keep single-leg investment transfers flagged by detect_investment_transfers:
+    # Keep single-leg investment transfers flagged by link_investment_transfers:
     # they have no partner leg by design, so they would otherwise look orphaned.
     for t in txns:
         if "investment_transfer" in (t.get("link_labels", []) or []):
@@ -344,7 +344,7 @@ def promote_internal_transfers(
     Promotion also **cross-links** the discovered pair (sets ``linked_txn_ids``
     bidirectionally and appends a ``"self_reference"`` label on both legs). This
     makes promoted transfers first-class links, consistent with the pairs produced
-    by ``detect_transfers``, so a subsequent ``verify_txn_links`` pass will *not*
+    by ``link_transfers``, so a subsequent ``verify_txn_links`` pass will *not*
     flag them as orphaned ("transfer without linked twin"). Rows lacking a
     usable ``txn_id`` (e.g. some parser outputs) are still promoted by flag but
     left unlinked, since a link needs an id to resolve.

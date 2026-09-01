@@ -101,11 +101,11 @@ python -m pfa_ir_consolidator.render_md consolidated.ir.json -o consolidated.md 
 
 ```python
 from pfa_ir_consolidator import consolidate_statements
-from pfa_ir_consolidator.detect_transfers import (
-    detect_inter_bank_transfers,
-    detect_intra_bank_transfers,
-    detect_currency_conversions,
-    detect_cc_payments,
+from pfa_ir_consolidator.link_transfers import (
+    link_inter_bank_transfers,
+    link_intra_bank_transfers,
+    link_currency_conversions,
+    link_cc_payments,
 )
 from pfa_ir_schema import from_json, to_json
 
@@ -114,10 +114,10 @@ irs = [from_json(open(p, encoding="utf-8").read()) for p in ir_paths]
 consolidated = consolidate_statements(irs)
 
 # Flag internal transfers (run after consolidation, before verify_txn_links)
-detect_inter_bank_transfers(consolidated)
-detect_intra_bank_transfers(consolidated)
-detect_currency_conversions(consolidated)
-detect_cc_payments(consolidated)
+link_inter_bank_transfers(consolidated)
+link_intra_bank_transfers(consolidated)
+link_currency_conversions(consolidated)
+link_cc_payments(consolidated)
 
 out = to_json(consolidated)
 ```
@@ -141,7 +141,7 @@ pfa-ir-consolidator/
     └── pfa_ir_consolidator/
         ├── __init__.py       # consolidate_statements, main
         ├── consolidate.py    # merge + dedup + provenance
-        ├── detect_transfers.py  # inter/intra-bank, currency conversion, CC payment detection
+        ├── link_transfers.py  # inter/intra-bank, currency conversion, CC payment linking
         ├── fx_rates.py       # back-compat shim → pfa-fx (live FX fetch + cache + fallback)
         ├── render_md.py      # consolidated IR -> Markdown
         ├── render_model.py   # in-memory render model
