@@ -112,6 +112,23 @@ pfa-analysis           (categorization, financial reports & visualization)
 pfa-cli                (CLI entry point)
 ```
 
+## Function Naming Conventions
+
+Across the `pfa-ir-*` packages, passes are named by verb so callers can tell at
+a glance whether a pass mutates the IR or only reports on it:
+
+| Verb family | Mutates? | Behavior | Returns |
+|-------------|----------|----------|---------|
+| `link_*` / `promote_*` / `demote_*` | Yes | Writes IR data (`is_internal_transfer`, `linked_txn_ids`, `link_labels`, or adds/removes transactions) | mutated `ParsedStatement` |
+| `find_*` | No | Detects problems, returns a structured `IrVerificationReport` | report |
+| `verify_*` | No (warnings only) | Appends human-facing messages to `statement.warnings` | unchanged `ParsedStatement` |
+
+Rule of thumb: **appending a warning is observability, not mutation.** Read-only
+checks use `find_*` (returns a report) or `verify_*` (appends to warnings); only
+`link_*` / `promote_*` / `demote_*` write link/data fields. The canonical
+docstring lives in
+`packages/pfa-ir-verifier/src/pfa_ir_verifier/verify.py`.
+
 ## Tech Stack
 
 Python >= 3.12, Click, pdfplumber, Pandas, Pydantic, Matplotlib, Hatchling

@@ -44,6 +44,14 @@ When a pair is matched:
 
 Runs after ``consolidate_statements()`` and before ``verify_txn_links()``.
 Idempotent: already-matched transactions are skipped.
+
+Naming convention
+-----------------
+This module's passes use the ``link_*`` verb from the contract documented in
+``pfa_ir_verifier.verify`` (module docstring): ``link_*`` denotes a *mutating*
+relationship pass that writes ``is_internal_transfer`` / ``linked_txn_ids`` /
+``link_labels`` (and, for single-leg investment transfers, synthesises a write-off
+transaction). Read-only / warning-only checks use ``find_*`` / ``verify_*`` instead.
 """
 
 from __future__ import annotations

@@ -6,6 +6,24 @@ also accept a flat ``list[dict]`` of transaction rows (the shape
 ``pfa-analysis`` passes around internally) so they can be reused without
 pulling in the analysis stack.
 
+Naming conventions
+------------------
+Functions in this module (and the sibling linking passes in
+``pfa-ir-consolidator``) follow a verb-based contract so callers can tell at a
+glance whether a pass mutates the IR or merely reports on it:
+
+* ``link_*`` / ``promote_*`` / ``demote_*`` — **mutating**. They write actual IR
+  data (``is_internal_transfer``, ``linked_txn_ids``, ``link_labels``, or even add
+  / remove transactions) and return the mutated ``ParsedStatement``. ``link_*``
+  lives in ``pfa-ir-consolidator`` (e.g. ``link_transfers.py``) and the parser's
+  ``link_fd_to_ca``; ``promote_*`` / ``demote_*`` are this module's in-place fixers.
+* ``find_*`` — **read-only**. Detects problems and returns a structured
+  ``IrVerificationReport``; it never mutates the input.
+* ``verify_*`` — **read-only, warning-only**. Checks the IR and appends
+  human-facing messages to ``statement.warnings``, returning the (otherwise
+  unchanged) ``ParsedStatement``. A ``verify_*`` pass must NOT write link/data
+  fields — appending a warning is *observability*, not mutation.
+
 Public API
 ----------
 * :class:`IrVerificationReport` — structured result of a verification run.
