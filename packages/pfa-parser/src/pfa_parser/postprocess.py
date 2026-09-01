@@ -546,8 +546,8 @@ def postprocess_statement(statement: ParsedStatement) -> ParsedStatement:
     """Run the full post-processing pipeline on a :class:`ParsedStatement`.
 
     This is the canonical entry point for all post-extraction passes:
-    meta validation → running-balance fill → account-balance fill →
-    FD-CA linking → balance verification → FD interest verification →
+    meta validation → FD-CA linking → running-balance fill →
+    account-balance fill → balance verification → FD interest verification →
     credit-card balance fill → transfer-link verification.
 
     Mutates and returns *statement*. Callers that produce a
@@ -555,9 +555,9 @@ def postprocess_statement(statement: ParsedStatement) -> ParsedStatement:
     this before persisting the IR JSON.
     """
     statement = verify_statement_meta(statement)
+    statement = link_fd_to_ca(statement)
     statement = fill_fd_running_balances(statement)
     statement = fill_account_balances(statement)
-    statement = link_fd_to_ca(statement)
     statement = verify_account_balances(statement)
     statement = verify_fd_interest_amounts(statement)
     statement = fill_cc_running_balances(statement)
