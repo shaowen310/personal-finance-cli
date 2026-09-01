@@ -24,7 +24,10 @@ dependency graph.
 - `common` — masking & sanitization utilities shared by renderers:
   `mask_id`, `mask_name`, `mask_chinese_name`, `mask_names_in_description`,
   `sanitize_description`, `is_bank_num`, `parse_fd_rate`,
-  `format_fd_period`, `verify_fd_interest`.
+  `format_fd_period`.
+
+  > FD-interest *verification* (`verify_fd_interest`) lives in the
+  > `pfa-ir-verifier` package, not here — see that package's docs.
 
 ## Install
 

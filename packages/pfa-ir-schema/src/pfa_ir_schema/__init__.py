@@ -29,7 +29,6 @@ from .common import (
     mask_names_in_description,
     parse_fd_rate,
     sanitize_description,
-    verify_fd_interest,
 )
 
 __all__ = [
@@ -56,5 +55,4 @@ __all__ = [
     "parse_fd_rate",
     "sanitize_description",
     "to_json",
-    "verify_fd_interest",
 ]

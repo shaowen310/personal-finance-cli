@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from pfa_ir_schema import ParsedStatement, Transaction, from_json
+from pfa_ir_schema.common import _fd_day_count, _parse_fd_date, parse_fd_rate
 
 # A transaction row as understood by the verifier. ``pfa-analysis`` passes plain
 # dicts; ``ParsedStatement`` is flattened to the same shape.
@@ -425,6 +426,53 @@ def promote_internal_transfers(
                     partner = id_index.get(str(pid))
                     if partner is not None and not partner.get(flag_key):
                         partner[flag_key] = True
+
+
+def verify_fd_interest(
+    principal: float,
+    interest_rate: str | float | None,
+    value_date: str | None,
+    maturity_date: str | None,
+    interest_amount: float | None,
+    *,
+    tol: float = 0.01,
+    institution: str | None = None,
+    day_count: int | None = None,
+) -> str | None:
+    """Return a warning string if ``principal × rate × period ≠ interest_amount``.
+
+    Skips (returns ``None``) when ``interest_amount`` is ``None`` (e.g. OCBC),
+    the rate is unparseable, or the dates are missing/invalid/non-positive.
+    Period (years) is ``(maturity - value).days / basis`` where ``basis`` follows
+    the institution's day-count convention (actual/365 by default; actual/360 for
+    ICBC). ``day_count`` overrides the institution lookup when provided.
+
+    ``interest_rate`` may be either an already-decimal value (``0.025``) or a
+    raw string (``"2.5%"``); a decimal is passed through directly.
+    """
+    if interest_amount is None:
+        return None
+    if isinstance(interest_rate, (int, float)):
+        rate = float(interest_rate)
+    else:
+        rate = parse_fd_rate(interest_rate)
+    if rate is None:
+        return None
+    vd = _parse_fd_date(value_date)
+    mat = _parse_fd_date(maturity_date)
+    if vd is None or mat is None or mat <= vd:
+        return None
+    basis = day_count if (isinstance(day_count, int) and day_count > 0) else _fd_day_count(institution)
+    period_years = (mat - vd).days / basis
+    expected = principal * rate * period_years
+    if abs(interest_amount - expected) > tol:
+        return (
+            f"FD interest mismatch: principal {principal:,.2f} × rate {rate:.6f} "
+            f"× period {period_years:.6f}y (actual/{basis}d) = {expected:,.2f}, "
+            f"but stated interest amount is {interest_amount:,.2f} "
+            f"(diff={abs(interest_amount - expected):.2f})"
+        )
+    return None
 
 
 def verify_txn_links(statement: ParsedStatement) -> ParsedStatement:

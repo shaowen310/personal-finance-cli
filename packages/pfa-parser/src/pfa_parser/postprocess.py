@@ -16,17 +16,16 @@ from pfa_ir_schema import (
     ParsedStatement,
     Transaction,
     generate_txn_id,
-    verify_fd_interest,
 )
 from pfa_ir_schema.relations import (
     REL_FD_INTEREST,
     REL_FD_PRINCIPAL,
 )
-# Transaction link-integrity *verification* (verify_txn_links) lives in
-# pfa-ir-verifier (the canonical home for IR verification); re-use it here.
-# FD<->CA *linking* (link_fd_to_ca) is still defined locally below, not in
-# the verifier.
-from pfa_ir_verifier import verify_txn_links
+# FD-interest *verification* (verify_fd_interest) and transaction link-integrity
+# *verification* (verify_txn_links) live in pfa-ir-verifier (the canonical home
+# for IR verification); re-use them here. FD<->CA *linking* (link_fd_to_ca) is
+# still defined locally below, not in the verifier.
+from pfa_ir_verifier import verify_fd_interest, verify_txn_links
 
 
 def fill_fd_running_balances(statement: ParsedStatement) -> ParsedStatement:
