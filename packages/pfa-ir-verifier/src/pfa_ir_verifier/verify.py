@@ -16,6 +16,10 @@ Public API
 * :func:`promote_internal_transfers` — fixer; promotes description-based
   self-reference rows to internal transfers only when a valid partner leg exists.
 * :func:`verify_txn_links` — link-integrity check (orphan + reciprocal symmetry).
+* :func:`verify_account_balances` — account-level balance consistency check
+  (closing vs opening + Σtxns, and vs last ``balance_after``).
+* :func:`verify_fd_interest_amounts` — per-FD interest-amount check that
+  delegates to :func:`_fd_interest_mismatch` for every ``fd_record``.
 * :func:`verify_ir` — convenience loader + full check for a JSON file or
   ``ParsedStatement`` (links + internal-transfer reconciliation).
 """
@@ -28,7 +32,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
-from pfa_ir_schema import ParsedStatement, Transaction, from_json
+from pfa_ir_schema import AccountType, ParsedStatement, Transaction, from_json
 from pfa_ir_schema.common import _fd_day_count, _parse_fd_date, parse_fd_rate
 
 # A transaction row as understood by the verifier. ``pfa-analysis`` passes plain
@@ -428,7 +432,7 @@ def promote_internal_transfers(
                         partner[flag_key] = True
 
 
-def verify_fd_interest(
+def _fd_interest_mismatch(
     principal: float,
     interest_rate: str | float | None,
     value_date: str | None,
@@ -557,3 +561,108 @@ def verify_ir(path_or_ir: str | Path | ParsedStatement | dict[str, Any] | list[A
     if isinstance(ir, ParsedStatement):
         verify_txn_links(ir)
     return find_internal_transfer_orphans(ir)
+
+
+def verify_account_balances(statement: ParsedStatement) -> ParsedStatement:
+    """Verify account-level balance consistency against transactions.
+
+    For accounts with transactions:
+      * If both ``opening_balance`` and ``closing_balance`` are present, verify
+        that ``closing = opening + Σtxn.amount`` (within tolerance ``1e-6``).
+      * If the last transaction carries ``balance_after``, verify it matches
+        ``closing_balance``.
+
+    For accounts without transactions:
+      * If both balances are present, verify ``opening == closing``.
+
+    UNIT_TRUST accounts are skipped.
+    Idempotent: warnings already present are not re-appended.
+
+    Mutates and returns *statement*.
+    """
+    for acct in statement.accounts:
+        if acct.account_type == AccountType.UNIT_TRUST.value:
+            continue
+        txns = acct.transactions or []
+
+        if txns:
+            sorted_txns = sorted(txns, key=lambda t: t.posted_date or "")
+
+            # Verify closing_balance against last txn's balance_after
+            last_ba = sorted_txns[-1].balance_after
+            if last_ba is not None and acct.closing_balance is not None:
+                if abs(float(acct.closing_balance) - last_ba) > 1e-6:
+                    warn = (
+                        f"closing_balance mismatch for account '{acct.name}' "
+                        f"({acct.account_no}, {acct.currency or '?'}): "
+                        f"closing_balance={acct.closing_balance:,.2f} "
+                        f"but last transaction balance_after={last_ba:,.2f}"
+                    )
+                    if warn not in statement.warnings:
+                        statement.warnings.append(warn)
+
+            # Verify closing = opening + Σamount
+            # Skip for fixed-deposit accounts: fill_fd_running_balances already
+            # set correct opening_balance and balance_after using principal-only
+            # deltas.  Raw t.amount may include non-principal amounts (e.g. interest
+            # disbursements) that would cause false mismatches here.
+            if (
+                acct.account_type != AccountType.FIXED_DEPOSIT.value
+                and acct.opening_balance is not None
+                and acct.closing_balance is not None
+            ):
+                total_amount = sum(float(t.amount or 0.0) for t in sorted_txns)
+                expected_closing = float(acct.opening_balance) + total_amount
+                if abs(float(acct.closing_balance) - expected_closing) > 1e-6:
+                    warn = (
+                        f"closing_balance mismatch for account '{acct.name}' "
+                        f"({acct.account_no}, {acct.currency or '?'}): "
+                        f"closing_balance={acct.closing_balance:,.2f} "
+                        f"but opening_balance + Σtransactions = "
+                        f"{acct.opening_balance:,.2f} + {total_amount:,.2f} = "
+                        f"{expected_closing:,.2f}"
+                    )
+                    if warn not in statement.warnings:
+                        statement.warnings.append(warn)
+        else:
+            # No transactions: opening should equal closing
+            if acct.opening_balance is not None and acct.closing_balance is not None:
+                if abs(float(acct.opening_balance) - float(acct.closing_balance)) > 1e-6:
+                    warn = (
+                        f"closing_balance mismatch for account '{acct.name}' "
+                        f"({acct.account_no}, {acct.currency or '?'}): "
+                        f"opening_balance={acct.opening_balance:,.2f} "
+                        f"but closing_balance={acct.closing_balance:,.2f} "
+                        f"(no transactions to explain difference)"
+                    )
+                    if warn not in statement.warnings:
+                        statement.warnings.append(warn)
+
+    return statement
+
+
+def verify_fd_interest_amounts(statement: ParsedStatement) -> ParsedStatement:
+    """Verify every fixed-deposit interest amount against principal × rate × tenor.
+
+    Runs on both the fresh-extraction and IR-reload paths, so ``--ir-only``
+    re-validates FD interest even when the builder was never re-run. Idempotent:
+    a warning already present in ``statement.warnings`` (e.g. loaded from a saved
+    ``.ir.json``) is not re-appended.
+
+    Mutates and returns *statement*.
+    """
+    for acct in statement.accounts:
+        if acct.account_type != AccountType.FIXED_DEPOSIT:
+            continue
+        for rec in (acct.fd_records or []):
+            warn = _fd_interest_mismatch(
+                principal=rec.principal,
+                interest_rate=rec.interest_rate,
+                value_date=rec.value_date,
+                maturity_date=rec.maturity_date,
+                interest_amount=rec.interest_amount,
+                institution=statement.statement_meta.institution,
+            )
+            if warn and warn not in statement.warnings:
+                statement.warnings.append(warn)
+    return statement
