@@ -522,7 +522,7 @@ def fill_account_balances(statement: ParsedStatement) -> ParsedStatement:
 _CREDIT_CARD_TYPES: frozenset[str] = frozenset({"credit_card", "credit", "card"})
 
 
-def fill_cc_balances(statement: ParsedStatement) -> ParsedStatement:
+def fill_cc_running_balances(statement: ParsedStatement) -> ParsedStatement:
     """Fill ``balance_after`` on credit-card transactions.
 
     Sorts transactions by ``posted_date``, then computes a running balance
@@ -560,6 +560,6 @@ def postprocess_statement(statement: ParsedStatement) -> ParsedStatement:
     statement = link_fd_to_ca(statement)
     statement = verify_account_balances(statement)
     statement = verify_fd_interest_amounts(statement)
-    statement = fill_cc_balances(statement)
+    statement = fill_cc_running_balances(statement)
     statement = verify_txn_links(statement)
     return statement
