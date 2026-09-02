@@ -14,12 +14,20 @@ import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import TypedDict, cast
 
 # Allow running as a standalone script from scripts/ or the repo root.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from pfa_ir_schema import from_json, Account, ParserInfo, StatementMeta, ParsedStatement  # noqa: E402
+from pfa_ir_schema import (  # noqa: E402
+    Account,
+    FixedDepositRecord,
+    InvestmentHolding,
+    ParserInfo,
+    ParsedStatement,
+    StatementMeta,
+    Transaction
+)
 
 from pfa_ir_consolidator.link_transfers import (  # noqa: E402
     link_cc_payments,
@@ -42,7 +50,18 @@ VERSION = "0.1.0"
 DEFAULT_MIN_IR_VERSION = "2026.4"
 
 
-def _own_account_digits(accounts: list[Any]) -> set[str]:
+class _PromoteRow(TypedDict):
+    """Row shape consumed by ``pfa_ir_verifier.promote_internal_transfers``."""
+
+    amount: float
+    description: str
+    is_internal_transfer: bool
+    txn_id: str
+    linked_txn_ids: list[str]
+    link_labels: list[str]
+
+
+def _own_account_digits(accounts: list[Account]) -> set[str]:
     """Return the digit-only forms of every account number across ``accounts``.
 
     Used by self-reference promotion to recognise descriptions that reference
@@ -98,9 +117,9 @@ def _is_iso_date(value: str | None) -> bool:
         return False
 
 
-def _merge_fd(accs: list[Any]) -> list[Any] | None:
+def _merge_fd(accs: list[Account]) -> list[FixedDepositRecord] | None:
     """Concatenate fd_records across statements, de-dup by deposit_no."""
-    recs: list[Any] = []
+    recs: list[FixedDepositRecord] = []
     seen: set[str] = set()
     for acc in accs:
         for r in acc.fd_records or []:
@@ -112,9 +131,9 @@ def _merge_fd(accs: list[Any]) -> list[Any] | None:
     return recs or None
 
 
-def _merge_inv(accs: list[Any]) -> list[Any] | None:
+def _merge_inv(accs: list[Account]) -> list[InvestmentHolding] | None:
     """Concatenate investment_holdings across statements, de-dup by name."""
-    recs: list[Any] = []
+    recs: list[InvestmentHolding] = []
     seen: set[str] = set()
     for acc in accs:
         for h in acc.investment_holdings or []:
@@ -127,15 +146,15 @@ def _merge_inv(accs: list[Any]) -> list[Any] | None:
 
 
 def consolidate_statements(
-    stmts_with_paths: list[tuple[str, Any]],
+    stmts_with_paths: list[tuple[str, ParsedStatement]],
     do_dedup: bool,
-) -> tuple[Any, int, int, int]:
+) -> tuple[ParsedStatement, int, int, int]:
     """``stmts_with_paths`` is a list of (path, ParsedStatement)."""
-    groups: dict[tuple[str, str, str], list[Any]] = {}
+    groups: dict[tuple[str, str, str], list[Account]] = {}
     # Track the source statement meta for each account key so we can fill
     # period_from/period_to on the merged Account.
     key_periods: dict[tuple[str, str, str], tuple[str | None, str | None]] = {}
-    sources: list[dict[str, Any]] = []
+    sources: list[dict[str, str | int]] = []
     total_txns_in = 0
 
     for src_path, stmt in stmts_with_paths:
@@ -180,7 +199,7 @@ def consolidate_statements(
                         continue
                     seen.add(t.txn_id)
                 txns.append(t)
-        def _txn_sort_key(t: Any) -> tuple[Any, Any]:
+        def _txn_sort_key(t: Transaction) -> tuple[str, str]:
             return (t.posted_date, t.txn_id)
 
         txns.sort(key=_txn_sort_key)
@@ -220,8 +239,8 @@ def consolidate_statements(
     # parallel dict view and copy the flag / links / labels back.
     own_digits = _own_account_digits(merged_accounts)
     if own_digits:
-        flat_rows: list[dict[str, Any]] = []
-        row_txn: list[Any] = []
+        flat_rows: list[_PromoteRow] = []
+        row_txn: list[Transaction] = []
         for acc in merged_accounts:
             for t in acc.transactions:
                 flat_rows.append({
@@ -233,7 +252,7 @@ def consolidate_statements(
                     "link_labels": list(t.link_labels or []),
                 })
                 row_txn.append(t)
-        promote_internal_transfers(flat_rows, own_digits)
+        promote_internal_transfers(cast(list[dict[str, str | float | bool | list[str]]], flat_rows), own_digits)
         for row, t in zip(flat_rows, row_txn):
             t.is_internal_transfer = row["is_internal_transfer"]
             t.linked_txn_ids = list(row["linked_txn_ids"])
@@ -328,9 +347,9 @@ def consolidate_statements(
 
 
 def embed_fx_rates(
-    consolidated: Any,
+    consolidated: ParsedStatement,
     as_of: str | None = None,
-) -> Any:
+) -> ParsedStatement:
     """Embed an FX rate block into a consolidated ``ParsedStatement``.
 
     .. note::
@@ -385,6 +404,3 @@ def embed_fx_rates(
     extras["consolidation"] = consolid
     consolidated.extras = extras
     return consolidated
-
-
-
