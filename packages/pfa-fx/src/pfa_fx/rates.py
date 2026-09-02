@@ -9,11 +9,11 @@ import json
 import logging
 import os
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Protocol
 
 from .cache import cache_get, cache_put
 from .defaults import BASE_CCY, DEFAULT_FX_RATES
-from .providers import get_provider
+from .providers import FXProvider, get_provider
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -44,7 +44,19 @@ class FXResult:
     missing: list[str] = field(default_factory=list)
 
 
-def collect_currencies(stmt: Any) -> list[str]:
+class _AccountLike(Protocol):
+    """An account exposing a ``currency`` attribute (str or str-convertible)."""
+
+    currency: str
+
+
+class _StatementLike(Protocol):
+    """Statement-like object exposing an ``accounts`` list for FX collection."""
+
+    accounts: list[_AccountLike]
+
+
+def collect_currencies(stmt: _StatementLike) -> list[str]:
     """Collect distinct non-SGD currency codes from a statement-like object.
 
     Duck-typed: works with ``ParsedStatement`` (pfa-ir-schema) as well as plain
@@ -52,7 +64,7 @@ def collect_currencies(stmt: Any) -> list[str]:
     """
     currencies: set[str] = set()
 
-    def add(acc: Any) -> None:
+    def add(acc: _AccountLike) -> None:
         cur = getattr(acc, "currency", None)
         if cur and str(cur).upper() != BASE_CCY:
             currencies.add(str(cur).upper())
@@ -69,14 +81,16 @@ def collect_currencies(stmt: Any) -> list[str]:
     return sorted(currencies)
 
 
-def _invert_to_sgd_per_unit(raw: dict[str, Any], _as_of: str = "") -> dict[str, float]:
+def _invert_to_sgd_per_unit(raw: dict[str, object], _as_of: str = "") -> dict[str, float]:
     """Convert Frankfurter's units-per-SGD into canonical SGD-per-unit.
 
     ``raw["rates"][ccy]`` = how many *ccy* per 1 SGD. We want SGD per 1 ccy,
     so invert: ``1.0 / (ccy per SGD)``. SGD itself stays ``1.0``.
     """
     out: dict[str, float] = {BASE_CCY: 1.0}
-    rates = raw.get("rates") or {}
+    rates = raw.get("rates")
+    if not isinstance(rates, dict):
+        return out
     for k, v in rates.items():
         ccy = str(k).upper()
         try:
@@ -93,7 +107,7 @@ def _invert_to_sgd_per_unit(raw: dict[str, Any], _as_of: str = "") -> dict[str, 
 def get_fx_rates(
     currencies: list[str],
     as_of: str | None = None,
-    provider: Any | None = None,
+    provider: FXProvider | None = None,
     force_refresh: bool = False,
 ) -> FXResult:
     """Get FX rates (SGD per 1 unit) for *currencies*, as of *as_of*.
