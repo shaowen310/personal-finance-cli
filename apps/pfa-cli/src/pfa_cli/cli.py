@@ -11,12 +11,7 @@ from pfa_ir_schema import from_json
 from pfa_ir_consolidator import (
     consolidate_statements,
     embed_fx_rates,
-    link_inter_bank_transfers,
-    link_intra_bank_transfers,
-    link_currency_conversions,
-    link_cc_payments,
 )
-from pfa_parser.postprocess import verify_txn_links
 
 from pfa_cli.dates import parse_month, parse_start_date, parse_end_date
 
@@ -204,11 +199,6 @@ def consolidate(inputs: tuple[str, ...], out_path: str, min_ir_version: str,
     consolidated, total_in, deduped, filtered = consolidate_statements(
         stmts_with_paths, do_dedup=not no_dedup
     )
-    consolidated = link_inter_bank_transfers(consolidated)
-    consolidated = link_intra_bank_transfers(consolidated)
-    consolidated = link_currency_conversions(consolidated)
-    consolidated = link_cc_payments(consolidated)
-    consolidated = verify_txn_links(consolidated)
     consolidated = embed_fx_rates(consolidated)
 
     transfers = (consolidated.extras or {}).get("consolidation", {}).get("transfers", {})

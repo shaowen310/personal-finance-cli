@@ -1,7 +1,6 @@
 from .consolidate import (
     consolidate_statements,
     embed_fx_rates,
-    main,
 )
 from .link_transfers import (
     link_cc_payments,
@@ -14,7 +13,6 @@ from .link_transfers import (
 __all__ = [
     "consolidate_statements",
     "embed_fx_rates",
-    "main",
     "link_inter_bank_transfers",
     "link_intra_bank_transfers",
     "link_currency_conversions",

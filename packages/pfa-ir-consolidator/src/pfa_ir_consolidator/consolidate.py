@@ -5,13 +5,11 @@ Reads N ``*.ir.json`` (``ParsedStatement``) files, merges accounts grouped by
 ``(institution, account_no, name)``, de-duplicates transactions by ``txn_id``,
 and writes a single consolidated ``ParsedStatement`` as ``consolidated.ir.json``.
 
-Usage:
-    python consolidate.py a.ir.json b.ir.json -o consolidated.ir.json
-    python consolidate.py *.ir.json -o consolidated.ir.json --min-ir-version 2026.4
+This module is a library; the CLI driver lives in the ``pfa-cli`` app
+(``apps/pfa-cli``), which calls ``consolidate_statements``.
 """
 from __future__ import annotations
 
-import argparse
 import re
 import sys
 from datetime import datetime, timezone
@@ -58,13 +56,6 @@ def _own_account_digits(accounts: list[Any]) -> set[str]:
             digits.add(re.sub(r"\D", "", no))
     digits.discard("")
     return digits
-
-
-def _version_ge(a: str, b: str) -> bool:
-    def _parts(v: str) -> list[int]:
-        return [int(x) for x in v.split(".") if x.isdigit()]
-
-    return _parts(a) >= _parts(b)
 
 
 def _to_iso_date(value: str | None) -> str | None:
@@ -315,6 +306,16 @@ def consolidate_statements(
         },
     )
 
+    # Post-consolidation relationship pipeline. consolidate_statements owns the
+    # full post-consolidation flow so callers (CLI, app) call only this function.
+    # The link_* passes write txn links / internal-transfer flags; they run
+    # before verify+demote so reconciliation sees a fully-linked IR.
+    consolidated = link_inter_bank_transfers(consolidated)
+    consolidated = link_intra_bank_transfers(consolidated)
+    consolidated = link_currency_conversions(consolidated)
+    consolidated = link_cc_payments(consolidated)
+    consolidated = link_investment_transfers(consolidated)
+
     # Ordered internal-transfer verification pipeline (runs after link_transfers
     # + the promotion post-pass above, all on the consolidated IR):
     #   1. promote_internal_transfers  -- recover unlinked own-account pairs (done on merged_accounts above; == consolidated.accounts)
@@ -338,8 +339,8 @@ def embed_fx_rates(
         on-disk cache (``pfa_fx.cache``), so the IR stays free of
         build-date snapshots that would mislead readers ("as of 2026-08-18"
         inside a July statement). This helper is kept only for callers that
-        explicitly want an inline FX block (e.g. ``--embed-fx``); the default
-        ``main`` path no longer calls it.
+        explicitly want an inline FX block (e.g. ``--embed-fx``); the app CLI
+        calls it only when ``--embed-fx`` is passed.
 
     The embedded block, when present, is stored in the canonical shape:
 
@@ -386,78 +387,4 @@ def embed_fx_rates(
     return consolidated
 
 
-def main() -> None:
-    ap = argparse.ArgumentParser(description="Consolidate IR JSON files.")
-    _ = ap.add_argument("inputs", nargs="+", help="Input *.ir.json files")
-    _ = ap.add_argument("-o", "--out", default="consolidated.ir.json", help="Output IR JSON path")
-    _ = ap.add_argument("--min-ir-version", default=DEFAULT_MIN_IR_VERSION, help="Minimum accepted ir_version")
-    _ = ap.add_argument("--no-dedup", action="store_true", help="Disable txn_id de-duplication")
-    _ = ap.add_argument("--embed-fx", action="store_true",
-                        help="Embed an FX rate block in the IR (off by default; "
-                             "the analysis step fetches/caches FX separately)")
-    _ = ap.add_argument("--indent", type=int, default=2, help="JSON indent")
-    args = ap.parse_args()
 
-    stmts_with_paths: list[tuple[str, Any]] = []
-    for path in args.inputs:
-        text = Path(path).read_text(encoding="utf-8")
-        try:
-            stmt = from_json(text)
-        except ValueError as e:
-            sys.exit(f"[error] {path}: {e}")
-        if not _version_ge(stmt.ir_version, args.min_ir_version):
-            sys.exit(
-                f"[error] {path}: ir_version {stmt.ir_version!r} < required "+
-                f"{args.min_ir_version!r}"
-            )
-        stmts_with_paths.append((str(path), stmt))
-
-    consolidated, total_in, deduped, filtered = consolidate_statements(
-        stmts_with_paths, do_dedup=not args.no_dedup
-    )
-    consolidated = link_inter_bank_transfers(consolidated)
-    consolidated = link_intra_bank_transfers(consolidated)
-    consolidated = link_currency_conversions(consolidated)
-    consolidated = link_cc_payments(consolidated)
-    consolidated = link_investment_transfers(consolidated)
-
-    from pfa_parser.postprocess import verify_txn_links
-    consolidated = verify_txn_links(consolidated)
-
-    # FX rates are intentionally NOT embedded by default — the analysis step
-    # fetches them as of the reporting cut-off and caches in %TEMP%. Embed only
-    # when --embed-fx is requested (e.g. for standalone IR portability).
-    if args.embed_fx:
-        consolidated = embed_fx_rates(consolidated)
-
-    transfers = (consolidated.extras or {}).get("consolidation", {}).get("transfers", {})
-    inter_bank_detected = transfers.get("inter_bank_detected", 0)
-    intra_bank_detected = transfers.get("intra_bank_detected", 0)
-    cc_detected = transfers.get("currency_conversion_detected", 0)
-    cc_payments_detected = transfers.get("cc_payments_detected", 0)
-    inv_detected = transfers.get("investment_detected", 0)
-    inv_synth = transfers.get("investment_synthesized", 0)
-    inv_total = inv_detected + inv_synth
-
-    out = Path(args.out)
-    _ = out.write_text(consolidated.to_json(indent=args.indent), encoding="utf-8")
-    total_out = total_in - deduped - filtered
-    print(f"Wrote {out}")
-    print(
-        f"  inputs={len(stmts_with_paths)} accounts={len(consolidated.accounts)} "+
-        f"txns_in={total_in} txns_out={total_out} deduped={deduped} filtered={filtered}"
-    )
-    if inter_bank_detected:
-        print(f"  inter_bank_transfers={inter_bank_detected} pairs")
-    if intra_bank_detected:
-        print(f"  intra_bank_transfers={intra_bank_detected} pairs")
-    if cc_detected:
-        print(f"  currency_conversion_transfers={cc_detected} pairs")
-    if cc_payments_detected:
-        print(f"  cc_payments={cc_payments_detected} pairs")
-    if inv_total:
-        print(f"  investment_transfers={inv_total} pairs")
-
-
-if __name__ == "__main__":
-    main()

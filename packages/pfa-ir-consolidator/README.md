@@ -101,23 +101,16 @@ python -m pfa_ir_consolidator.render_md consolidated.ir.json -o consolidated.md 
 
 ```python
 from pfa_ir_consolidator import consolidate_statements
-from pfa_ir_consolidator.link_transfers import (
-    link_inter_bank_transfers,
-    link_intra_bank_transfers,
-    link_currency_conversions,
-    link_cc_payments,
-)
 from pfa_ir_schema import from_json, to_json
 
-# Merge multiple IR JSON strings into one ParsedStatement
-irs = [from_json(open(p, encoding="utf-8").read()) for p in ir_paths]
-consolidated = consolidate_statements(irs)
-
-# Flag internal transfers (run after consolidation, before verify_txn_links)
-link_inter_bank_transfers(consolidated)
-link_intra_bank_transfers(consolidated)
-link_currency_conversions(consolidated)
-link_cc_payments(consolidated)
+# Merge multiple IR JSON files into one fully-linked, reconciled ParsedStatement.
+# consolidate_statements runs the link_* + verify/demote pipeline internally, so
+# callers only invoke this single function. Each input is a (path, statement) tuple.
+stmts = [
+    (p, from_json(open(p, encoding="utf-8").read()))
+    for p in ir_paths
+]
+consolidated = consolidate_statements(stmts)
 
 out = to_json(consolidated)
 ```
