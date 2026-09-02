@@ -57,7 +57,7 @@ transaction). Read-only / warning-only checks use ``find_*`` / ``verify_*`` inst
 from __future__ import annotations
 
 import re
-from typing import Any
+
 
 from pfa_ir_schema.relations import (
     REL_CC_PAYMENT,
@@ -66,7 +66,7 @@ from pfa_ir_schema.relations import (
     REL_INTRA_BANK,
     REL_INVESTMENT_TRANSFER,
 )
-from pfa_ir_schema import Transaction, generate_txn_id
+from pfa_ir_schema import Account, ParsedStatement, Transaction, generate_txn_id
 
 # Keywords that mark a transaction as a genuine transfer (as opposed to an
 # ordinary spend/income that merely happens to be opposite another transaction
@@ -109,7 +109,7 @@ def _acct_type_abbr(account_type: str) -> str:
     return _ACCOUNT_TYPE_ABBR.get(key, (key or "?").upper()[:2])
 
 
-def link_inter_bank_transfers(statement: Any) -> Any:
+def link_inter_bank_transfers(statement: ParsedStatement) -> ParsedStatement:
     """Link inter-bank internal-transfer transaction pairs.
 
     Mutates and returns *statement*. Idempotent (skips already-linked txns).
@@ -133,7 +133,7 @@ def link_inter_bank_transfers(statement: Any) -> Any:
 
     # Index every transaction by (posted_date, institution) for efficient grouping.
     # We group by posted_date first, then cross-check across institutions.
-    by_date: dict[str, list[tuple[int, Any, Any]]] = {}
+    by_date: dict[str, list[tuple[int, Account, Transaction]]] = {}
     for ai, acct in enumerate(statement.accounts):
         for _, txn in enumerate(acct.transactions or []):
             if not txn.posted_date:
@@ -212,8 +212,8 @@ def link_inter_bank_transfers(statement: Any) -> Any:
 
 
 def _cross_link(
-    txn_a: Any,
-    txn_b: Any,
+    txn_a: Transaction,
+    txn_b: Transaction,
     labels: tuple[str, ...] = (REL_INTER_BANK,),
     mark_internal: bool = True,
 ) -> None:
@@ -242,7 +242,7 @@ def _cross_link(
             txn_b.link_labels = list(txn_b.link_labels) + [lbl]
 
 
-def link_intra_bank_transfers(statement: Any) -> Any:
+def link_intra_bank_transfers(statement: ParsedStatement) -> ParsedStatement:
     """Link intra-bank current-account transfer transaction pairs.
 
     In a consolidated statement, a transfer between two current accounts at
@@ -278,7 +278,7 @@ def link_intra_bank_transfers(statement: Any) -> Any:
             institution_by_account[acct.account_no] = inst
 
     # Index every non-frozen transaction from current accounts by (posted_date, institution).
-    by_date: dict[str, list[tuple[int, Any, Any]]] = {}
+    by_date: dict[str, list[tuple[int, Account, Transaction]]] = {}
     for ai, acct in enumerate(statement.accounts):
         if acct.account_type != "current":
             continue
@@ -384,7 +384,7 @@ def _extract_cc_ref_id(description: str) -> str | None:
     return match.group(0) if match else None
 
 
-def link_currency_conversions(statement: Any) -> Any:
+def link_currency_conversions(statement: ParsedStatement) -> ParsedStatement:
     """Link in-house currency-conversion transaction pairs.
 
     When a multi-currency account at a bank performs a currency exchange (e.g.
@@ -425,7 +425,7 @@ def link_currency_conversions(statement: Any) -> Any:
             institution_by_account[acct.account_no] = inst
 
     # Index candidate transactions by (institution, ref_id).
-    by_key: dict[tuple[str, str], list[tuple[int, Any, Any]]] = {}
+    by_key: dict[tuple[str, str], list[tuple[int, Account, Transaction]]] = {}
     for ai, acct in enumerate(statement.accounts):
         for _, txn in enumerate(acct.transactions or []):
             if txn.is_internal_transfer:
@@ -485,7 +485,7 @@ def link_currency_conversions(statement: Any) -> Any:
     return statement
 
 
-def link_cc_payments(statement: Any) -> Any:
+def link_cc_payments(statement: ParsedStatement) -> ParsedStatement:
     """Link credit card payments from current accounts to credit card
     transactions at the same bank.
 
@@ -527,7 +527,7 @@ def link_cc_payments(statement: Any) -> Any:
     # Index candidate transactions by posted_date. A CC payment can only pair
     # a current account entry with a credit_card account entry, so each date
     # group must contain at least one of each role.
-    by_date: dict[str, list[tuple[int, Any, Any, str]]] = {}
+    by_date: dict[str, list[tuple[int, Account, Transaction, str]]] = {}
     for ai, acct in enumerate(statement.accounts):
         if acct.account_type not in ("current", "credit_card"):
             continue
@@ -613,7 +613,7 @@ def link_cc_payments(statement: Any) -> Any:
     return statement
 
 
-def _add_investment_writeoff(statement: Any, asset_txn: Any, ref_inv: set[str]) -> bool:
+def _add_investment_writeoff(statement: ParsedStatement, asset_txn: Transaction, ref_inv: set[str]) -> bool:
     """Pair a single-leg investment transfer with a synthetic write-off.
 
     The asset leg (current/savings) references one of the user's own investment
@@ -663,7 +663,7 @@ def _add_investment_writeoff(statement: Any, asset_txn: Any, ref_inv: set[str]) 
     return True
 
 
-def link_investment_transfers(statement: Any) -> Any:
+def link_investment_transfers(statement: ParsedStatement) -> ParsedStatement:
     """Link transfers from an asset account into one of the user's own
     investment accounts (SRS / Unit Trust / Fixed Deposit) and tag them internal.
 
@@ -707,8 +707,8 @@ def link_investment_transfers(statement: Any) -> Any:
 
     # Index candidate legs by posted_date. Investment legs come from investment
     # accounts; asset legs from everything else (current/savings/ewallet/...).
-    inv_by_date: dict[str, list[tuple[Any, Any]]] = {}
-    asset_by_date: dict[str, list[tuple[Any, Any]]] = {}
+    inv_by_date: dict[str, list[tuple[Transaction, Account]]] = {}
+    asset_by_date: dict[str, list[tuple[Transaction, Account]]] = {}
     for acct in statement.accounts:
         at = (acct.account_type or "").lower()
         for txn in (acct.transactions or []):
