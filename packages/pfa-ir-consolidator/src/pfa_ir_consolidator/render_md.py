@@ -515,7 +515,7 @@ def main() -> None:
     stmt = pfa_ir_schema.from_json(text)
 
     # Resolve FX rates on demand: union of the default watch-list and every
-    # non-SGD currency actually present in the statement's accounts.
+    # non-SGD currency actually present in the statement's accounts (ParsedStatement).
     as_of = args.fx_date or (stmt.statement_meta.period_to if stmt.statement_meta else None)
     currencies = collect_currencies(stmt)
     fx = get_fx_rates(

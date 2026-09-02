@@ -9,7 +9,6 @@ import json
 import logging
 import os
 from dataclasses import dataclass, field
-from typing import Protocol
 
 from .cache import cache_get, cache_put
 from .defaults import BASE_CCY, DEFAULT_FX_RATES
@@ -44,27 +43,17 @@ class FXResult:
     missing: list[str] = field(default_factory=list)
 
 
-class _AccountLike(Protocol):
-    """An account exposing a ``currency`` attribute (str or str-convertible)."""
-
-    currency: str
-
-
-class _StatementLike(Protocol):
-    """Statement-like object exposing an ``accounts`` list for FX collection."""
-
-    accounts: list[_AccountLike]
-
-
-def collect_currencies(stmt: _StatementLike) -> list[str]:
+def collect_currencies(stmt: object) -> list[str]:
     """Collect distinct non-SGD currency codes from a statement-like object.
 
     Duck-typed: works with ``ParsedStatement`` (pfa-ir-schema) as well as plain
-    dicts/lists, requiring no import of business packages.
+    dicts/lists, requiring no import of business packages. Any object exposing an
+    ``accounts`` attribute (or, for dicts, an ``"accounts"`` key) whose elements
+    carry a ``currency`` is accepted.
     """
     currencies: set[str] = set()
 
-    def add(acc: _AccountLike) -> None:
+    def add(acc: object) -> None:
         cur = getattr(acc, "currency", None)
         if cur and str(cur).upper() != BASE_CCY:
             currencies.add(str(cur).upper())

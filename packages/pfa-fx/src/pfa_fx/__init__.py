@@ -7,7 +7,7 @@ from .defaults import (
     DEFAULT_WATCH_SYMBOLS,
 )
 from .providers import FXProvider, FrankfurterProvider, PROVIDERS, get_provider
-from .rates import FXResult, collect_currencies, get_fx_rates
+from .rates import FXResult, collect_currencies, get_fx_rates  # noqa: F401
 from .convert import convert_to_sgd
 from .wrapper import FxWrapper, fetch_fx_rates, fx_result_to_wrapper
 
