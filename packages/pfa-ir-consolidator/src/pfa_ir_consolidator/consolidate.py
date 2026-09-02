@@ -41,6 +41,7 @@ from pfa_ir_consolidator.link_transfers import (  # noqa: E402
 # Apply the full ordered pipeline here so the persisted consolidated IR already
 # carries correct flags/links and any surviving orphans are demoted.
 from pfa_ir_verifier import (  # noqa: E402
+    RawRow,
     demote_orphan_internal_transfers,
     promote_internal_transfers,
     verify_txn_links,
@@ -252,7 +253,7 @@ def consolidate_statements(
                     "link_labels": list(t.link_labels or []),
                 })
                 row_txn.append(t)
-        promote_internal_transfers(cast(list[dict[str, str | float | bool | list[str]]], flat_rows), own_digits)
+        promote_internal_transfers(cast(list[RawRow], flat_rows), own_digits)
         for row, t in zip(flat_rows, row_txn):
             t.is_internal_transfer = row["is_internal_transfer"]
             t.linked_txn_ids = list(row["linked_txn_ids"])

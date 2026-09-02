@@ -3,6 +3,7 @@
 from .verify import (
     InternalTransferIssue,
     IrVerificationReport,
+    RawRow,
     demote_orphan_internal_transfers,
     find_internal_transfer_orphans,
     promote_internal_transfers,
@@ -16,6 +17,7 @@ from .verify import (
 __all__ = [
     "InternalTransferIssue",
     "IrVerificationReport",
+    "RawRow",
     "find_internal_transfer_orphans",
     "promote_internal_transfers",
     "demote_orphan_internal_transfers",

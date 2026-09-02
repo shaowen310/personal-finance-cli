@@ -50,24 +50,74 @@ import re
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, TypedDict, cast
 
 from pfa_ir_schema import AccountType, ParsedStatement, Transaction, from_json
 from pfa_ir_schema.common import _fd_day_count, _parse_fd_date, parse_fd_rate
 
 # A transaction row as understood by the verifier. ``pfa-analysis`` passes plain
-# dicts; ``ParsedStatement`` is flattened to the same shape.
-# A transaction row supporting dict-like read/write. Both plain dicts (loaded
-# IR) and the dataclass-backed ``_TxnView`` satisfy this interface, so the
-# verifier can mutate either in place.
-class Txn(Protocol):
-    def get(self, key: str, default: Any = ...) -> Any: ...
-    def __getitem__(self, key: str) -> Any: ...
-    def __setitem__(self, key: str, value: Any) -> None: ...
-    def __contains__(self, key: str) -> bool: ...
+# dicts; ``ParsedStatement`` is flattened to the same shape. The canonical row is
+# the ``Txn`` TypedDict below. A ``_TxnView`` wraps a ``Transaction`` dataclass so
+# the verifier can mutate a ``ParsedStatement`` in place (writes propagate back to
+# the source object); plain dict rows are mutated directly.
+class Txn(TypedDict):
+    """A transaction row (canonical shape shared by dict rows and ``Transaction``)."""
+
+    currency: str
+    amount: float
+    is_internal_transfer: bool
+    txn_id: str
+    description: str
+    account_type: str
+    linked_txn_ids: list[str]
+    link_labels: list[str]
 
 
-def _iter_txns(ir: ParsedStatement | dict[str, Any] | list[Any] | str | Path) -> list[Any]:
+# A loose flat transaction row as passed by callers. ``pfa-analysis``'s
+# ``RawRowForVerifier`` and ``pfa-ir-consolidator``'s ``_PromoteRow`` are both
+# structurally this shape (the inferred element type of their row lists). The
+# fixers only read/write a small fixed set of string/number/flag/label keys, so
+# a permissive value type is sufficient and callers need not ``cast`` at every
+# call site.
+RawRow = dict[str, str | float | bool | None | list[str]]
+
+
+# Any IR input the verifier accepts: a ParsedStatement, a raw IR dict, a flat
+# list of txn rows, or a file path. The dict/list members use ``Any`` (as the
+# verifier's original contract did) because the flat row shape is shared across
+# packages as *different* TypedDicts (e.g. ``pfa-analysis``'s ``TxnRow``); a
+# narrower value type such as ``object`` would reject those callers under
+# ``list`` invariance, forcing casts at every call site. ``RawRow`` (below) is the
+# concrete flat-row shape accepted by ``promote_internal_transfers``.
+IrInput = (
+    ParsedStatement
+    | dict[str, Any]
+    | list[Any]
+    | str
+    | Path
+)
+
+
+class _TxnView(dict):
+    """dict-like view over a ``Transaction`` dataclass.
+
+    Allows the verifier to read/write transaction fields uniformly whether the
+    underlying row is a plain dict (loaded IR) or a ``Transaction`` dataclass
+    (ParsedStatement). Writes propagate back to the source object.
+    """
+
+    def __init__(self, obj: Transaction) -> None:
+        super().__init__(
+            {k: v for k, v in vars(obj).items() if not k.startswith("_")}
+        )
+        self._o = obj
+
+    def __setitem__(self, key: str, value: object) -> None:
+        super().__setitem__(key, value)
+        setattr(self._o, key, value)
+
+
+def _iter_txns(ir: IrInput) -> list[Txn]:
     """Normalise any supported IR input into a flat list of txn dicts.
 
     Accepts a ``ParsedStatement``, a plain ``dict`` (accounts/transactions), a
@@ -76,50 +126,35 @@ def _iter_txns(ir: ParsedStatement | dict[str, Any] | list[Any] | str | Path) ->
     if isinstance(ir, (str, Path)):
         ir = from_json(Path(ir).read_text(encoding="utf-8"))
     if isinstance(ir, list):
-        return ir
+        # Caller's dict rows are mutated in place (no copy), so fixes propagate.
+        return cast(list[Txn], ir)
     if isinstance(ir, ParsedStatement):
         # Return views backed by the dataclasses so that in-place mutations
         # (e.g. clearing is_internal_transfer) propagate to the source IR.
-        return [_TxnView(t) for acct in ir.accounts for t in acct.transactions]
+        return cast(list[Txn], [_TxnView(t) for acct in ir.accounts for t in acct.transactions])
     if isinstance(ir, dict):
         if "accounts" in ir:
-            rows = []
-            for acct in ir["accounts"]:
-                atype = acct.get("account_type", "")
-                for t in acct.get("transactions", []):
-                    d = dict(t)
-                    d.setdefault("account_type", atype)
-                    rows.append(d)
+            rows: list[Txn] = []
+            accounts = ir.get("accounts")
+            if isinstance(accounts, list):
+                for acct in accounts:
+                    if not isinstance(acct, dict):
+                        continue
+                    atype = str(acct.get("account_type", ""))
+                    txns = acct.get("transactions")
+                    if isinstance(txns, list):
+                        for t in txns:
+                            if not isinstance(t, dict):
+                                continue
+                            d: dict[str, object] = dict(t)
+                            d.setdefault("account_type", atype)
+                            rows.append(cast(Txn, d))
             return rows
         if "transactions" in ir:  # legacy flat format
-            return list(ir["transactions"])
+            raw = ir.get("transactions")
+            if isinstance(raw, list):
+                return [cast(Txn, t) for t in raw if isinstance(t, dict)]
     raise TypeError(f"Unsupported IR input type: {type(ir)!r}")
-
-
-class _TxnView:
-    """dict-like view over a ``Transaction`` dataclass.
-
-    Allows the verifier to read/write transaction fields uniformly whether the
-    underlying row is a plain dict (loaded IR) or a ``Transaction`` dataclass
-    (ParsedStatement). Writes propagate back to the source object.
-    """
-
-    __slots__ = ("_o",)
-
-    def __init__(self, obj: Any) -> None:
-        self._o = obj
-
-    def get(self, key: str, default: Any = None) -> Any:
-        return getattr(self._o, key, default)
-
-    def __getitem__(self, key: str) -> Any:
-        return getattr(self._o, key)
-
-    def __setitem__(self, key: str, value: Any) -> None:
-        setattr(self._o, key, value)
-
-    def __contains__(self, key: str) -> bool:
-        return hasattr(self._o, key)
 
 
 @dataclass
@@ -222,7 +257,7 @@ def _detect_orphans(txns: list[Txn]) -> list[InternalTransferIssue]:
 
 
 def find_internal_transfer_orphans(
-    ir: ParsedStatement | dict[str, Any] | list[Any],
+    ir: IrInput,
 ) -> IrVerificationReport:
     """Read-only verification: detect unpaired internal transfers.
 
@@ -249,7 +284,7 @@ def _acct_digit_runs(description: str) -> set[str]:
     return {r for r in re.findall(r"\d+", str(description)) if len(r) >= 4}
 
 
-def _is_liability_settlement(row: dict[str, Any],
+def _is_liability_settlement(row: Txn,
                              own_liability_digits: set[str] | None) -> bool:
     """True when *row* is a payment from an asset account to one of the user's own
     liability accounts (e.g. a credit-card bill payment).
@@ -275,7 +310,7 @@ def _is_liability_settlement(row: dict[str, Any],
 
 
 def demote_orphan_internal_transfers(
-    ir: ParsedStatement | dict[str, Any] | list[Any],
+    ir: IrInput,
     own_liability_digits: set[str] | None = None,
 ) -> IrVerificationReport:
     """Fixer: demote orphan internal-flagged rows in place.
@@ -333,8 +368,13 @@ def _self_reference_accounts(description: str, own_digits: set[str]) -> set[str]
     return {no for no in own_digits if no in digit_runs}
 
 
+def _as_str_list(value: object) -> list[str]:
+    """Coerce a loosely-typed row value into a ``list[str]`` (best effort)."""
+    return value if isinstance(value, list) else []
+
+
 def promote_internal_transfers(
-    rows: list[dict[str, Any]],
+    rows: list[RawRow],
     own_digits: set[str],
     amount_key: str = "amount",
     desc_key: str = "description",
@@ -390,9 +430,9 @@ def promote_internal_transfers(
         matched = ref_accounts[i]
         if not matched or r.get(flag_key):
             continue
-        amt = float(r.get(amount_key, 0.0))
+        amt = float(str(r.get(amount_key, 0.0)))
         promoted = False
-        partner: dict[str, Any] | None = None
+        partner: RawRow | None = None
         for acct_no in matched:
             for j in by_acct.get(acct_no, []):
                 if j == i:
@@ -404,7 +444,7 @@ def promote_internal_transfers(
                 # be the candidate here.
                 if not cand.get(flag_key) and acct_no not in ref_accounts[j]:
                     continue
-                p_amt = float(cand.get(amount_key, 0.0))
+                p_amt = float(str(cand.get(amount_key, 0.0)))
                 if amt * p_amt < 0 and abs(abs(amt) - abs(p_amt)) <= tol:
                     promoted = True
                     partner = cand
@@ -419,14 +459,15 @@ def promote_internal_transfers(
         id_i = str(r.get(txn_id_key, "") or "").strip()
         id_j = str(partner.get(txn_id_key, "") or "").strip()
         if id_i and id_j:
-            if id_j not in r.setdefault(links_key, []):
-                r[links_key] = list(r[links_key]) + [id_j]
-            if "self_reference" not in r.setdefault(labels_key, []):
-                r[labels_key] = list(r[labels_key]) + ["self_reference"]
-            if id_i not in partner.setdefault(links_key, []):
-                partner[links_key] = list(partner[links_key]) + [id_i]
-            if "self_reference" not in partner.setdefault(labels_key, []):
-                partner[labels_key] = list(partner[labels_key]) + ["self_reference"]
+            if id_j not in _as_str_list(r.setdefault(links_key, [])):
+                r[links_key] = _as_str_list(r[links_key]) + [id_j]
+            if "self_reference" not in _as_str_list(r.setdefault(labels_key, [])):
+                r[labels_key] = _as_str_list(r[labels_key]) + ["self_reference"]
+            if id_i not in _as_str_list(partner.setdefault(links_key, [])):
+                partner[links_key] = _as_str_list(partner[links_key]) + [id_i]
+            if "self_reference" not in _as_str_list(partner.setdefault(labels_key, [])):
+                partner[labels_key] = _as_str_list(partner[links_key]) + ["self_reference"]
+
 
     # Asset -> own-liability settlements (e.g. credit-card bill payments). These
     # are internal transfers even without a partner leg: the spend was already an
@@ -438,7 +479,7 @@ def promote_internal_transfers(
         for r in rows:
             if r.get(flag_key):
                 continue
-            if _is_liability_settlement(r, own_liability_digits):
+            if _is_liability_settlement(cast(Txn, r), own_liability_digits):
                 r[flag_key] = True
                 # Flag any linked partner so both legs are internal transfers.
                 # Otherwise the partner (e.g. the card's credit leg) stays
@@ -446,7 +487,7 @@ def promote_internal_transfers(
                 # the promoted leg would look like a single-leg orphan. When the
                 # partner is absent (only one leg in the IR) the demote guard on
                 # _is_liability_settlement still protects the promoted leg.
-                for pid in (r.get(links_key, []) or []):
+                for pid in _as_str_list(r.get(links_key, [])):
                     partner = id_index.get(str(pid))
                     if partner is not None and not partner.get(flag_key):
                         partner[flag_key] = True
@@ -563,7 +604,7 @@ def verify_txn_links(statement: ParsedStatement) -> ParsedStatement:
     return statement
 
 
-def verify_ir(path_or_ir: str | Path | ParsedStatement | dict[str, Any] | list[Any]) -> IrVerificationReport:
+def verify_ir(path_or_ir: IrInput) -> IrVerificationReport:
     """Convenience: verify a JSON file path or an in-memory IR.
 
     For file paths the IR is parsed with :func:`pfa_ir_schema.from_json` so the
