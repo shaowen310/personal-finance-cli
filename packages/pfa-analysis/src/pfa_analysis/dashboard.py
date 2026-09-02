@@ -11,29 +11,169 @@ from __future__ import annotations
 import json
 from collections import defaultdict
 from pathlib import Path
-from typing import Any
+from typing import TypedDict, cast
 
 from pfa_fx import fetch_fx_rates  # noqa: F401  (cached; used by build_dashboard_json)
 from pfa_analysis.analyze import (
     _analyze_file,
     _classify_discretionary,
     _load_ir_with_txn_id,
+    AnalysisResult,
     compute_fx_gain_loss,
+    FxPair,
+    Meta,
     _NON_CASH_ACCOUNT_TYPES,
     _split_cat,
     classify_cash_flow,
     parse_date_to_iso,
     parse_num,
+    TxnRow,
     UNCATEGORIZED,
 )
-from pfa_analysis.render_md import convert_to_sgd
+from pfa_analysis.render_md import FxWrapper, convert_to_sgd
+
+
+# ---------------------------------------------------------------------------
+# Typed shapes for the assembled dashboard (no ``Any``)
+# ---------------------------------------------------------------------------
+
+class DashboardAnalysisResult(AnalysisResult, total=False):
+    """An ``AnalysisResult`` plus the extra keys the dashboard attaches."""
+
+    _meta_raw: Meta
+    _rows: list[TxnRow]
+
+
+class IncomeSource(TypedDict):
+    category: str
+    subcategory: str
+    SGD: float
+    CNY: float
+    total_sgd: float | None
+    pct: float | None
+
+
+class SpendingCategory(TypedDict):
+    category: str
+    subcategory: str
+    amount_sgd: float
+    pct: float
+    discretionary: bool
+
+
+class TopMerchant(TypedDict):
+    merchant: str
+    category: str
+    amount_sgd: float
+
+
+class AccountChange(TypedDict):
+    name: str
+    currency: str
+    opening: float | None
+    closing: float | None
+    delta: float | None
+
+
+class InvestmentHoldingDetail(TypedDict):
+    name: str
+    currency: str
+    units: float
+    price: float | None
+    valuation: float
+    cost_basis: float | None
+    unrealized_pnl: float | None
+    pnl_pct: float | None
+
+
+class CashFlowSummary(TypedDict):
+    income_total_sgd: float | None
+    expense_total_sgd: float | None
+    net_operating_sgd: float | None
+    transfers_in_sgd: float | None
+    transfers_out_sgd: float | None
+
+
+class AssetComposition(TypedDict):
+    by_currency: dict[str, dict[str, float]]
+    total_sgd_equivalent: dict[str, float] | None
+
+
+class CashFlow(TypedDict):
+    summary: CashFlowSummary
+
+
+class FxGainLoss(TypedDict):
+    base_currency: str
+    total_sgd: float
+    as_of: str
+    source: str
+    by_received_currency: dict[str, float]
+    pairs: list[FxPair]
+
+
+class IncomeTrend(TypedDict):
+    months: list[str]
+    by_source: dict[str, list[float]]
+
+
+class IncomeAnalysis(TypedDict):
+    by_source: list[IncomeSource]
+    by_currency: dict[str, float]
+    trend: IncomeTrend
+
+
+class DiscretionarySplit(TypedDict):
+    discretionary_sgd: float
+    non_discretionary_sgd: float
+    discretionary_pct: float
+    non_discretionary_pct: float
+
+
+class SpendTrend(TypedDict):
+    months: list[str]
+    by_category: dict[str, list[float]]
+
+
+class SpendingAnalysis(TypedDict):
+    by_category: list[SpendingCategory]
+    discretionary_split: DiscretionarySplit
+    top_merchants: list[TopMerchant]
+    trend: SpendTrend
+
+
+class AccountValueChange(TypedDict):
+    current_accounts: list[AccountChange]
+    fixed_deposits: list[AccountChange]
+
+
+class Trends(TypedDict):
+    months: list[str]
+    net_worth_sgd: list[float | None]
+    cash_flow_net_sgd: list[float | None]
+    income_total_sgd: list[float | None]
+    expense_total_sgd: list[float | None]
+
+
+class DashboardData(TypedDict):
+    period: dict[str, str]
+    base_currency: str
+    fx_rates: dict[str, float]
+    asset_composition: AssetComposition
+    cash_flow: CashFlow
+    fx_gain_loss: FxGainLoss
+    income_analysis: IncomeAnalysis
+    spending_analysis: SpendingAnalysis
+    account_value_change: AccountValueChange
+    investment_detail: list[InvestmentHoldingDetail]
+    trends: Trends
 
 
 def build_dashboard_json(
     ir_paths: list[Path],
     categories_path: Path | None = None,
     cost_basis_path: Path | None = None,
-) -> dict[str, Any]:
+) -> DashboardData | dict[str, str]:
     """Build the ``dashboard_data.json`` structure from IR files + optional inputs.
 
     Args:
@@ -56,12 +196,12 @@ def build_dashboard_json(
         cost_basis = json.loads(cost_basis_path.read_text(encoding="utf-8"))
 
     # ---- Load all IR files --------------------------------------------------
-    all_results: list[dict[str, Any]] = []
-    all_rows: list[dict[str, Any]] = []
+    all_results: list[DashboardAnalysisResult] = []
+    all_rows: list[TxnRow] = []
     for p in ir_paths:
         meta_raw, ir_rows = _load_ir_with_txn_id(p)
         # Build the same structure as analyze_file() for reuse
-        result = _analyze_file(p, txn_categories=categories or None)
+        result = cast(DashboardAnalysisResult, _analyze_file(p, txn_categories=categories or None))
         result["_meta_raw"] = meta_raw
         result["_rows"] = ir_rows
         all_results.append(result)
@@ -79,7 +219,7 @@ def build_dashboard_json(
     latest_period = periods[-1] if periods else {"from": "", "to": ""}
 
     # ---- FX rates -----------------------------------------------------------
-    fx_rates: dict[str, Any] | None = None
+    fx_rates: FxWrapper | None = None
     fx_data: dict[str, float] = {}
     # IR files no longer embed FX. Value FX as of the latest statement
     # period-end across the loaded results (cached in %TEMP% by fetch_fx_rates).
@@ -87,7 +227,7 @@ def build_dashboard_json(
                  for r in all_results]
     valid_dates = [d for d in iso_dates if d]
     if valid_dates:
-        fx_rates = fetch_fx_rates(max(valid_dates))
+        fx_rates = cast(FxWrapper, fetch_fx_rates(max(valid_dates)))
     if fx_rates:
         fx_data = {str(k).upper(): float(v) for k, v in fx_rates["rates"].items()}
 
@@ -138,7 +278,7 @@ def build_dashboard_json(
     # total is meaningless — set to None so the dashboard can show "n/a".
     if fx_rates is None and len(ccies) > 1:
         total = None
-    asset_composition = {"by_currency": by_currency, "total_sgd_equivalent": total}
+    asset_composition: AssetComposition = {"by_currency": by_currency, "total_sgd_equivalent": total}
 
     # ---- Cash Flow (aggregated across all files) -----------------------------
     cf_income = defaultdict(float)
@@ -171,7 +311,7 @@ def build_dashboard_json(
         return round(sum(
             (convert_to_sgd(v, c, fx_rates) or v) for c, v in data.items()), 2)
 
-    cash_flow_summary = {
+    cash_flow_summary: CashFlowSummary = {
         "income_total_sgd": round(total_income_sgd, 2) if _cf_valid else None,
         "expense_total_sgd": round(total_expense_sgd, 2) if _cf_valid else None,
         "net_operating_sgd": round(total_income_sgd - total_expense_sgd, 2) if _cf_valid else None,
@@ -180,7 +320,7 @@ def build_dashboard_json(
     }
 
     # ---- Income Analysis (using categories.json) -----------------------------
-    income_sources_list: list[dict[str, Any]] = []
+    income_sources_list: list[IncomeSource] = []
     # Only use the latest period's rows for the period total (not all periods).
     # For trends we'll use all rows grouped by month.
     latest_rows = all_results[-1].get("_rows", [])
@@ -221,7 +361,7 @@ def build_dashboard_json(
             income_currency_totals[ccy] = income_currency_totals.get(ccy, 0.0) + round(val, 2)
 
     # Helper: extract normalized YYYY-MM month from a period-end date string.
-    def _extract_month(meta: dict[str, Any]) -> str:
+    def _extract_month(meta: Meta) -> str:
         pe = str(meta.get("period_end", ""))
         iso = parse_date_to_iso(pe)
         return iso[:7] if iso else pe[:7]
@@ -253,7 +393,7 @@ def build_dashboard_json(
         for s in sorted(all_sources):
             income_trend_by_source[s].append(round(period_income.get(s, 0.0), 2))
 
-    income_analysis = {
+    income_analysis: IncomeAnalysis = {
         "by_source": income_sources_list,
         "by_currency": income_currency_totals,
         "trend": {
@@ -295,7 +435,7 @@ def build_dashboard_json(
     disc_sgd = sum(v for c, v in spending_by_cat.items() if _classify_discretionary(c))
     nondisc_sgd = total_spending - disc_sgd
 
-    spending_categories_list: list[dict[str, Any]] = []
+    spending_categories_list: list[SpendingCategory] = []
     for cat in sorted(spending_by_cat, key=lambda c: spending_by_cat[c], reverse=True):
         amt = spending_by_cat[cat]
         spending_categories_list.append({
@@ -309,7 +449,7 @@ def build_dashboard_json(
     # Top merchants (top 10 by amount)
     sorted_merchants = sorted(spending_top_merchants.items(),
                               key=lambda x: x[1][0], reverse=True)[:10]
-    top_merchants_list: list[dict[str, Any]] = []
+    top_merchants_list: list[TopMerchant] = []
     for merchant, (amt, cat) in sorted_merchants:
         top_merchants_list.append({
             "merchant": merchant,
@@ -347,7 +487,7 @@ def build_dashboard_json(
         for s in sorted(all_spend_cats):
             spend_trend_by_cat[s].append(round(period_spend.get(s, 0.0), 2))
 
-    spending_analysis = {
+    spending_analysis: SpendingAnalysis = {
         "by_category": spending_categories_list,
         "discretionary_split": {
             "discretionary_sgd": round(disc_sgd, 2),
@@ -363,8 +503,8 @@ def build_dashboard_json(
     }
 
     # ---- Account Value Change ------------------------------------------------
-    current_accounts: list[dict[str, Any]] = []
-    fixed_deposits: list[dict[str, Any]] = []
+    current_accounts: list[AccountChange] = []
+    fixed_deposits: list[AccountChange] = []
     # Use the first and last file for opening/closing comparison when available.
     for r in all_results:
         meta_r = r.get("_meta_raw", r.get("meta", {}))
@@ -407,13 +547,13 @@ def build_dashboard_json(
                 "delta": td_delta,
             })
 
-    account_value_change = {
+    account_value_change: AccountValueChange = {
         "current_accounts": current_accounts,
         "fixed_deposits": fixed_deposits,
     }
 
     # ---- Investment Detail ---------------------------------------------------
-    investment_detail: list[dict[str, Any]] = []
+    investment_detail: list[InvestmentHoldingDetail] = []
     for r in all_results:
         meta_r = r.get("_meta_raw", r.get("meta", {}))
         for h in meta_r.get("investment_holdings", []):
@@ -499,7 +639,7 @@ def build_dashboard_json(
         trend_income.append(round(inc, 2) if _cf_valid else None)
         trend_expense.append(round(exp, 2) if _cf_valid else None)
 
-    trends = {
+    trends: Trends = {
         "months": trend_months,
         "net_worth_sgd": trend_net_worth,
         "cash_flow_net_sgd": trend_cf_net,
@@ -509,7 +649,7 @@ def build_dashboard_json(
 
     # ---- Realized FX Gain/Loss (per IR, aggregated) --------------------------
     fx_total_sgd = 0.0
-    fx_pairs: list[dict[str, Any]] = []
+    fx_pairs: list[FxPair] = []
     fx_by_recv: dict[str, float] = defaultdict(float)
     fx_as_of = ""
     fx_source = ""
@@ -527,7 +667,7 @@ def build_dashboard_json(
             fx_as_of = fxd["as_of"]
         if not fx_source and fxd.get("source"):
             fx_source = fxd["source"]
-    fx_gain_loss = {
+    fx_gain_loss: FxGainLoss = {
         "base_currency": "SGD",
         "total_sgd": round(fx_total_sgd, 2),
         "as_of": fx_as_of,
@@ -537,12 +677,13 @@ def build_dashboard_json(
     }
 
     # ---- Assemble ------------------------------------------------------------
+    cash_flow: CashFlow = {"summary": cash_flow_summary}
     return {
         "period": latest_period,
         "base_currency": "SGD",
         "fx_rates": fx_data,
         "asset_composition": asset_composition,
-        "cash_flow": {"summary": cash_flow_summary},
+        "cash_flow": cash_flow,
         "fx_gain_loss": fx_gain_loss,
         "income_analysis": income_analysis,
         "spending_analysis": spending_analysis,

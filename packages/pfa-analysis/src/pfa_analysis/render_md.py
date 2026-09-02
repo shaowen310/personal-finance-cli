@@ -15,9 +15,20 @@ from __future__ import annotations
 import math
 from collections import defaultdict
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, TypedDict, cast
 
-from pfa_fx import BASE_CCY, convert_to_sgd as pfa_convert_to_sgd
+from pfa_fx import BASE_CCY, FxWrapper, convert_to_sgd as pfa_convert_to_sgd
+
+if TYPE_CHECKING:
+    from pfa_analysis.analyze import (
+        AnalysisResult,
+        DrilldownRow,
+        DrilldownTxn,
+        FxResult,
+        IncomeExpenseGroup,
+        Metrics,
+        TransferGroup,
+    )
 
 # ---------------------------------------------------------------------------
 # Shared FX utilities (used by both renderer & analyze.py)
@@ -26,7 +37,19 @@ from pfa_fx import BASE_CCY, convert_to_sgd as pfa_convert_to_sgd
 FX_BASE = BASE_CCY  # canonical base currency (SGD)
 
 
-def convert_to_sgd(amount: float, currency: str, fx_rates: dict[str, Any] | None) -> float | None:
+# NOTE: ``class`` is a Python keyword, so the TypedDict is declared with the
+# functional syntax (a class-based ``class:`` field is a syntax error).
+CatSummaryEntry = TypedDict(
+    "CatSummaryEntry",
+    {
+        "class": str,
+        "category": str,
+        "count": int,
+    },
+)
+
+
+def convert_to_sgd(amount: float, currency: str, fx_rates: FxWrapper | None) -> float | None:
     """Convert ``amount`` in ``currency`` to SGD using ``fx_rates``.
 
     ``fx_rates`` is the renderer wrapper dict ``{"rates": {CCY: SGD per 1 unit}}``.
@@ -48,7 +71,7 @@ def fmt(v: float | None) -> str:
     return f"{v:,.2f}" if isinstance(v, (int, float)) else "\u2014"
 
 
-def _it_display_amount(txn: dict[str, Any]) -> float:
+def _it_display_amount(txn: DrilldownTxn) -> float:
     """Cash-flow sign for an internal-transfer transaction in this report.
 
     Money OUT of an account is shown negative, money INTO an account positive.
@@ -64,9 +87,9 @@ def _it_display_amount(txn: dict[str, Any]) -> float:
     return amt
 
 
-def _render_txn_detail_table(out: list[str], entries: list[dict[str, Any]], key: str,
+def _render_txn_detail_table(out: list[str], entries: list[IncomeExpenseGroup] | list[TransferGroup], key: str,
                              use_fx: bool,
-                             fx_rates: dict[str, Any] | None,
+                             fx_rates: FxWrapper | None,
                              signed_total: bool = False) -> dict[str, float]:
     """Append a per-transaction detail table (used by the income, expense and
     transfer drill-downs) to ``out``.
@@ -151,14 +174,14 @@ def _assert_sgd_total(section: str, label: str, summary_sgd: float,
         )
 
 
-def render_report(result: dict[str, Any], consolidated: bool = False,
-                  fx_rates: dict[str, Any] | None = None,
-                  drilldown: list[dict[str, Any]] | None = None,
-                  income_drilldown: list[dict[str, Any]] | None = None,
-                  expense_drilldown: list[dict[str, Any]] | None = None,
-                  transfer_drilldown: list[dict[str, Any]] | None = None,
-                  fx_gain_loss: dict[str, Any] | None = None,
-                  cat_summary: list[dict[str, Any]] | None = None,
+def render_report(result: AnalysisResult, consolidated: bool = False,
+                  fx_rates: FxWrapper | None = None,
+                  drilldown: list[DrilldownRow] | None = None,
+                  income_drilldown: list[IncomeExpenseGroup] | None = None,
+                  expense_drilldown: list[IncomeExpenseGroup] | None = None,
+                  transfer_drilldown: list[TransferGroup] | None = None,
+                  fx_gain_loss: FxResult | None = None,
+                  cat_summary: list[CatSummaryEntry] | None = None,
                   cat_coverage: float | None = None,
                   warnings: list[str] | None = None) -> str:
     """Render a balance-sheet + cash-flow Markdown report.
@@ -208,10 +231,18 @@ def render_report(result: dict[str, Any], consolidated: bool = False,
         # Mirror the Balance Sheet currency set (account balances), so currencies
         # with a balance but no transactions in the window (e.g. a dormant USD
         # account) still appear here. Transaction-derived metrics default to zeros.
-        def _default_metrics() -> dict[str, Any]:
-            return {"income": 0.0, "expense": 0.0, "transfer_in_external": 0.0,
-                    "transfer_out_external": 0.0, "net_change_cash": 0.0,
-                    "net_operating": 0.0, "savings_rate": 0.0, "closing": None}
+        def _default_metrics() -> Metrics:
+            return {
+                "income": 0.0, "expense": 0.0,
+                "transfer_in": 0.0, "transfer_out": 0.0,
+                "transfer_in_internal": 0.0, "transfer_out_internal": 0.0,
+                "transfer_in_external": 0.0, "transfer_out_external": 0.0,
+                "fx_conversion_in": 0.0, "fx_conversion_out": 0.0,
+                "total_inflow": 0.0, "total_outflow": 0.0,
+                "net_change_cash": 0.0, "net_operating": 0.0, "savings_rate": 0.0,
+                "opening": None, "closing": None, "balance_change": None,
+                "reconciliation_ok": None, "txn_count": 0,
+            }
         exec_ccies = sorted(
             c for c in (set(mbc) | set(assets["cash"]) | set(assets["time_deposits"])
                         | set(assets["investments"]) | set(liabilities_bs))
@@ -431,9 +462,6 @@ def render_report(result: dict[str, Any], consolidated: bool = False,
     out.append("## 3. Funds Flow Statement\n")
     if mbc:
         cf_ccies = sorted(mbc)
-        # Helper: pull a per-currency field across all currencies.
-        def _col(field: str) -> dict[str, float]:
-            return {c: mbc[c][field] for c in cf_ccies}
 
         # One row per cash-flow line item, each spanning all currency columns.
         # Internal transfers = moves between the user's own accounts (not real
@@ -457,7 +485,7 @@ def render_report(result: dict[str, Any], consolidated: bool = False,
             ("Currency Conversion",
              {c: mbc[c]["fx_conversion_in"] - mbc[c]["fx_conversion_out"]
               for c in cf_ccies}, False),
-            ("Net Change in Cash", _col("net_change_cash"), True),
+            ("Net Change in Cash", {c: mbc[c]["net_change_cash"] for c in cf_ccies}, True),
         ]
 
         header_parts = ["| Funds Flow"]
@@ -518,7 +546,7 @@ def render_report(result: dict[str, Any], consolidated: bool = False,
         tot_sgd = 0.0
         income_summary_sgd: dict[str, float] = {}
         for entry in income_drilldown:
-            source = entry["source"]
+            source = entry.get("source", "")
             by_ccy = entry["by_currency"]
             income_cells: list[str] = [source]
             row_sgd = 0.0
@@ -648,9 +676,9 @@ def render_report(result: dict[str, Any], consolidated: bool = False,
         # an account = negative, INTO an account = positive); a balanced pair nets
         # to ~0 in the funds flow. Credit-card legs flip to positive because the
         # card is the account that receives the payment.
-        transfer_rows: list[dict[str, Any]] = []
+        transfer_rows: list[TransferGroup] = []
         for entry in transfer_drilldown:
-            cat = entry["category"]
+            cat = entry.get("category", "")
             txns = entry.get("transactions", [])
             for label, sign in ((f"{cat} In", 1), (f"{cat} Out", -1)):
                 leg = [t for t in txns if sign * _it_display_amount(t) > 0]
@@ -707,10 +735,10 @@ def render_report(result: dict[str, Any], consolidated: bool = False,
         # Render each leg with its cash-flow display sign (credit-card payments flip
         # to positive, since the card is the account that receives the money) via a
         # shallow copy, leaving the source IR data untouched.
-        combined_txns: list[dict[str, Any]] = []
+        combined_txns: list[DrilldownTxn] = []
         for entry in transfer_drilldown:
             for t in entry.get("transactions", []):
-                d = dict(t)
+                d = cast(DrilldownTxn, dict(t))
                 d["amount"] = _it_display_amount(t)
                 combined_txns.append(d)
         if combined_txns:
@@ -747,8 +775,8 @@ def render_report(result: dict[str, Any], consolidated: bool = False,
                 sign = "+" if gl >= 0 else "-"
                 out.append(
                     f"| {p.get('date', '')} "
-                    f"| {fmt(g['amount'])} {g['currency']} "
-                    f"| {fmt(r['amount'])} {r['currency']} "
+                    f"| {fmt(float(g['amount']))} {g['currency']} "
+                    f"| {fmt(float(r['amount']))} {r['currency']} "
                     f"| {p.get('implied_rate', 0):.4f} "
                     f"| {sign}{fmt(abs(gl))} |"
                 )
@@ -837,7 +865,7 @@ def render_report(result: dict[str, Any], consolidated: bool = False,
     # falls outside the report window is shown at its last known closing balance,
     # which is not the true period-end position (e.g. a bill payment to the card
     # inside the window is recorded on the paying account only).
-    cf_liab_rows: list[dict[str, Any]] = []
+    cf_liab_rows: list[DrilldownRow] = []
     for r in (drilldown or []):
         if r.get("carried_forward"):
             cf_liab_rows.append(r)
@@ -853,7 +881,7 @@ def render_report(result: dict[str, Any], consolidated: bool = False,
             "the window end. Verify against the latest statement."
         )
 
-    me_liab_rows: list[dict[str, Any]] = []
+    me_liab_rows: list[DrilldownRow] = []
     for r in (drilldown or []):
         if r.get("missing_early"):
             me_liab_rows.append(r)

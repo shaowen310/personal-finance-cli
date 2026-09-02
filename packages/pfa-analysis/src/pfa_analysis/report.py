@@ -16,7 +16,7 @@ import json
 import sys
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from pfa_analysis.analyze import (
     _analyze_file,
@@ -27,8 +27,8 @@ from pfa_analysis.analyze import (
 )
 from pfa_analysis.categorize import UNCATEGORIZED
 from pfa_fx import fetch_fx_rates
-from pfa_analysis.dashboard import build_dashboard_json
-from pfa_analysis.render_md import render_report
+from pfa_analysis.dashboard import DashboardData, build_dashboard_json
+from pfa_analysis.render_md import CatSummaryEntry, render_report
 
 
 def demo_ir() -> dict[str, Any]:
@@ -159,7 +159,7 @@ def render_consolidated_report(
     )
 
     # Build categorization summary from drilldown data.
-    cat_summary: list[dict[str, Any]] = []
+    cat_summary: list[CatSummaryEntry] = []
     total_categorized = 0
     total_classifiable = 0
     for entry in income_drill:
@@ -237,7 +237,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.dashboard_json:
         cat_path = Path(args.categories) if args.categories else None
         cb_path = Path(args.cost_basis) if args.cost_basis else None
-        dashboard = build_dashboard_json([in_path], cat_path, cb_path)
+        dashboard = cast(DashboardData, build_dashboard_json([in_path], cat_path, cb_path))
         out_path = out_dir / "dashboard_data.json"
         _ = out_path.write_text(
             json.dumps(dashboard, indent=2, ensure_ascii=False) + "\n",

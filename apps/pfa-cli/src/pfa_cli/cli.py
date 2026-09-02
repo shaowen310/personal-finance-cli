@@ -6,7 +6,7 @@ from pathlib import Path
 import click
 
 from pfa_parser import SGBankPDFParser
-from pfa_ir_schema import from_json
+from pfa_ir_schema import ParsedStatement, from_json
 
 from pfa_ir_consolidator import (
     consolidate_statements,
@@ -182,7 +182,7 @@ def consolidate(inputs: tuple[str, ...], out_path: str, min_ir_version: str,
       pfa consolidate a.ir.json b.ir.json -o consolidated.ir.json
       pfa consolidate *.ir.json --min-ir-version 2026.4
     """
-    stmts_with_paths: list[tuple[str, object]] = []
+    stmts_with_paths: list[tuple[str, ParsedStatement]] = []
     for path in inputs:
         text = Path(path).read_text(encoding="utf-8")
         try:

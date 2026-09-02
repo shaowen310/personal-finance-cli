@@ -12,7 +12,6 @@ from .convert_statement import detect_type, main
 
 __all__ = [
     "BankStatementParser",
-    "ParsedStatement",
     "SGBankPDFParser",
     "Transaction",
     "detect_type",

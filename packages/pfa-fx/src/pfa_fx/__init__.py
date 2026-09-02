@@ -9,7 +9,7 @@ from .defaults import (
 from .providers import FXProvider, FrankfurterProvider, PROVIDERS, get_provider
 from .rates import FXResult, collect_currencies, get_fx_rates
 from .convert import convert_to_sgd
-from .wrapper import fetch_fx_rates, fx_result_to_wrapper
+from .wrapper import FxWrapper, fetch_fx_rates, fx_result_to_wrapper
 
 __all__ = [
     "BASE_CCY",
@@ -26,4 +26,5 @@ __all__ = [
     "convert_to_sgd",
     "fetch_fx_rates",
     "fx_result_to_wrapper",
+    "FxWrapper",
 ]

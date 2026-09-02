@@ -32,7 +32,6 @@ from __future__ import annotations
 
 import json
 import re
-import sys
 from collections import defaultdict
 from pathlib import Path
 from typing import TypedDict, cast, NotRequired
@@ -1011,7 +1010,7 @@ from pfa_analysis.render_md import render_report, fmt  # noqa: E402
 
 def process_one_file(path: Path, out_dir: Path) -> AnalysisResult:
     result = _analyze_file(path)
-    text = render_report(cast(dict[str, object], result))
+    text = render_report(result)
     out_path = out_dir / (path.stem + "_Finance_Report.md")
     out_path.parent.mkdir(parents=True, exist_ok=True)
     _ = out_path.write_text(text, encoding="utf-8")

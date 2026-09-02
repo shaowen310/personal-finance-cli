@@ -12,18 +12,27 @@ offline across report runs and months.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, TypedDict, cast
 
 from .cache import load_cache, save_cache
 from .defaults import DEFAULT_WATCH_SYMBOLS
 from .rates import FXResult, get_fx_rates
 
+
+class FxWrapper(TypedDict):
+    """Canonical renderer FX wrapper: SGD-per-unit rates plus provenance."""
+
+    rates: dict[str, float]
+    date: str
+    source: str
+
+
 # In-memory cache keyed by date string (YYYY-MM-DD) to avoid re-reading the
 # on-disk cache within a single process run.
-_WRAPPER_CACHE: dict[str, dict[str, Any]] = {}
+_WRAPPER_CACHE: dict[str, FxWrapper] = {}
 
 
-def _wrapper_cache_get(date_str: str) -> dict[str, Any] | None:
+def _wrapper_cache_get(date_str: str) -> FxWrapper | None:
     """Return a previously cached wrapper dict for *date_str*, or None.
 
     Wrapper entries are stored without an expiry so they survive across months
@@ -32,17 +41,17 @@ def _wrapper_cache_get(date_str: str) -> dict[str, Any] | None:
     """
     cache = load_cache()
     entry = cache.get("entries", {}).get("wrapper", {}).get(date_str)
-    return entry if isinstance(entry, dict) else None
+    return cast(FxWrapper, entry) if isinstance(entry, dict) else None
 
 
-def _wrapper_cache_put(date_str: str, wrapper: dict[str, Any]) -> None:
+def _wrapper_cache_put(date_str: str, wrapper: FxWrapper) -> None:
     """Persist *wrapper* under the ``wrapper`` bucket for offline reuse."""
     cache = load_cache()
     cache.setdefault("entries", {}).setdefault("wrapper", {})[date_str] = wrapper
     save_cache(cache)
 
 
-def fx_result_to_wrapper(result: FXResult) -> dict[str, Any]:
+def fx_result_to_wrapper(result: FXResult) -> FxWrapper:
     """Convert an :class:`FXResult` to the renderer wrapper dict."""
     return {
         "rates": dict(result.rates),
@@ -54,7 +63,7 @@ def fx_result_to_wrapper(result: FXResult) -> dict[str, Any]:
 def fetch_fx_rates(
     date_str: str | None = None,
     currencies: list[str] | None = None,
-) -> dict[str, Any]:
+) -> FxWrapper | None:
     """Fetch FX rates as a renderer wrapper dict (SGD-per-unit rates).
 
     With an empty *currencies* list, all available currencies are fetched.
