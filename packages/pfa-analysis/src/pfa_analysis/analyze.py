@@ -35,7 +35,7 @@ import re
 import sys
 from collections import defaultdict
 from pathlib import Path
-from typing import Any
+from typing import TypedDict, cast, NotRequired
 
 # Internal-transfer reconciliation (and self-reference promotion) lives in the
 # standalone pfa-ir-verifier package so it can be run independently (e.g. CI)
@@ -54,19 +54,228 @@ from pfa_fx import DEFAULT_FX_RATES
 # Internal transaction model
 # ---------------------------------------------------------------------------
 #
-#   {"date": str, "description": str, "amount": float, "currency": str,
-#    "is_internal_transfer": bool, "balance_after": float | None}
-#
 # `amount` is SIGNED: credits/income positive, debits/spend negative.
 
-Txn = dict[str, Any]
+class TxnRow(TypedDict):
+    """A flattened transaction row as consumed across the analysis stack."""
+
+    date: str
+    description: str
+    amount: float
+    currency: str
+    account_type: str
+    account: str
+    txn_id: str
+    is_internal_transfer: bool
+    balance_after: float | None
+    linked_txn_ids: list[str]
+    link_labels: list[str]
+    institution: NotRequired[str]
+    bank: NotRequired[str]
+
+
+# Backwards-compatible alias for the transaction-row type.
+Txn = TxnRow
+
+
+class DrilldownTxn(TypedDict):
+    """A display transaction row used inside income/expense/transfer drilldowns."""
+
+    date: str
+    description: str
+    amount: float
+    currency: str
+    bank: str
+    account: str
+    account_type: str
+    txn_id: NotRequired[str]
+    linked_txn_ids: NotRequired[list[str]]
+
+
+class RawTxn(TypedDict, total=False):
+    """A raw ``transactions[]`` entry as parsed from ``.ir.json``."""
+
+    posted_date: str
+    value_date: str
+    amount: float | str
+    description: str
+    is_internal_transfer: bool
+    balance_after: float | str | None
+    txn_id: str
+    linked_txn_ids: list[str]
+    link_labels: list[str]
+    currency: str
+
+
+class RawHolding(TypedDict, total=False):
+    name: str
+    currency: str
+    valuation: float | str | None
+    market_value: float | str | None
+
+
+class RawAccount(TypedDict, total=False):
+    account_no: str
+    account_type: str
+    currency: str
+    institution: str
+    closing_balance: float | str | None
+    opening_balance: float | str | None
+    period_to: str
+    period_from: str
+    transactions: list[RawTxn]
+    investment_holdings: list[RawHolding]
+
+
+class StatementMeta(TypedDict, total=False):
+    institution: str
+    account_id: str
+    currency: str
+    functional_currency: str
+    period_from: str
+    period_to: str
+    opening_balance: float | str | None
+    closing_balance: float | str | None
+
+
+class TimeDeposit(TypedDict, total=False):
+    account_no: str
+    currency: str
+    closing_balance: float | None
+    deposit_no: str
+    principal: float | str | None
+    interest_amount: float | str | None
+
+
+class Extras(TypedDict, total=False):
+    time_deposits: list[TimeDeposit]
+    unit_trusts: list[RawHolding]
+
+
+class AccountSummaryEntry(TypedDict, total=False):
+    account_no: str
+    account_type: str
+    currency: str
+    institution: str
+    closing_balance: float | None
+    opening_balance: float | None
+
+
+class RawIr(TypedDict, total=False):
+    statement_meta: StatementMeta
+    extras: Extras
+    accounts: list[RawAccount]
+    account_summary: list[AccountSummaryEntry]
+    investment_holdings: list[RawHolding]
+    institution: str
+    source_file: str
+
+
+class Meta(TypedDict, total=False):
+    bank: str
+    account_no: str
+    currency: str | None
+    period_start: str | None
+    period_end: str | None
+    opening: float | str | None
+    closing: float | str | None
+    account_summary: list[AccountSummaryEntry]
+    investment_holdings: list[RawHolding]
+    extras: Extras
+    source_file: str | None
+    _consolidated: bool
+
+
+class Metrics(TypedDict):
+    income: float
+    expense: float
+    transfer_in: float
+    transfer_out: float
+    transfer_in_internal: float
+    transfer_in_external: float
+    transfer_out_internal: float
+    transfer_out_external: float
+    fx_conversion_in: float
+    fx_conversion_out: float
+    total_inflow: float
+    total_outflow: float
+    net_change_cash: float
+    net_operating: float
+    savings_rate: float
+    opening: float | None
+    closing: float | None
+    balance_change: float | None
+    reconciliation_ok: bool | None
+    txn_count: int
+
+
+class DrilldownRow(TypedDict):
+    currency: str
+    institution: str
+    account_no: str
+    account_type: str
+    bucket: str
+    native_value: float
+    derivation: str
+    carried_forward: bool
+    period_to: str | None
+    missing_early: bool
+    earliest_covered: str | None
+    latest_covered: str | None
+
+
+class IncomeExpenseGroup(TypedDict):
+    source: NotRequired[str]
+    category: NotRequired[str]
+    by_currency: dict[str, float]
+    transactions: list[DrilldownTxn]
+
+
+class TransferGroup(TypedDict):
+    category: str
+    by_currency: dict[str, float]
+    transactions: list[DrilldownTxn]
+
+
+class FxPair(TypedDict):
+    date: str
+    given: dict[str, str | float]
+    received: dict[str, str | float]
+    implied_rate: float
+    fx_gl_sgd: float
+    txn_ids: list[str]
+
+
+class FxResult(TypedDict):
+    base_currency: str
+    total_sgd: float
+    as_of: str
+    source: str
+    by_received_currency: dict[str, float]
+    pairs: list[FxPair]
+
+
+class AnalysisResult(TypedDict):
+    meta: Meta
+    metrics_by_ccy: dict[str, Metrics]
+    assets: dict[str, dict[str, float]]
+    drilldown: list[DrilldownRow]
+    has_txns: bool
+    source: str
+    warnings: list[str]
+
+
+# The verifier's ``promote_internal_transfers`` takes ``list[dict[str, Any]]``;
+# the row's real value types are a strict subset, so this alias lets us bridge
+# the call without leaking ``Any`` into the analysis types.
+RawRowForVerifier = dict[str, str | float | bool | None | list[str]]
 
 
 # ---------------------------------------------------------------------------
 # Numeric parsing helpers
 # ---------------------------------------------------------------------------
 
-def parse_num(s: Any) -> float | None:
+def parse_num(s: object) -> float | None:
     """Parse '1,234.56' / '0.00' / 1234.56 into a float; None if not parseable."""
     if s is None:
         return None
@@ -87,7 +296,7 @@ def parse_num(s: Any) -> float | None:
 # simple ``{account, period, balances}`` schema were dropped.
 
 
-def _is_consolidated(data: dict[str, Any]) -> bool:
+def _is_consolidated(data: RawIr) -> bool:
     """A file is a consolidated IR when it carries a top-level ``accounts[]`` array.
 
     Every supported input is a consolidated IR (single-account statements simply
@@ -100,7 +309,7 @@ def _is_consolidated(data: dict[str, Any]) -> bool:
 
 def load_statement(path: Path,
                    start_date: str | None = None,
-                   end_date: str | None = None) -> tuple[dict[str, Any], list[Txn]]:
+                   end_date: str | None = None) -> tuple[Meta, list[Txn]]:
     """Load a consolidated IR JSON and return (meta, normalized transactions).
 
     The only supported input is a consolidated IR that nests every account under
@@ -111,7 +320,7 @@ def load_statement(path: Path,
     When *start_date* and/or *end_date* are provided, transactions are
     filtered to the inclusive date range.
     """
-    data = json.loads(path.read_text(encoding="utf-8"))
+    data = cast(RawIr, json.loads(path.read_text(encoding="utf-8")))
     if "accounts" not in data:
         raise ValueError(
             f"{path.name}: unsupported statement format. Provide a consolidated "
@@ -121,7 +330,7 @@ def load_statement(path: Path,
     return _load_consolidated_ir(data, path, start_date, end_date)
 
 
-def _own_account_digits(accounts: list[dict[str, Any]]) -> set[str]:
+def _own_account_digits(accounts: list[RawAccount]) -> set[str]:
     """Digits-only forms of every known account number (for self-reference detection)."""
     digits: set[str] = set()
     for acct in accounts:
@@ -131,7 +340,7 @@ def _own_account_digits(accounts: list[dict[str, Any]]) -> set[str]:
     return digits
 
 
-def _own_liability_digits(accounts: list[dict[str, Any]]) -> set[str]:
+def _own_liability_digits(accounts: list[RawAccount]) -> set[str]:
     """Digits-only forms of the user's own *liability* account numbers (credit cards).
 
     A payment from an asset account to one of these is a balance-sheet settlement
@@ -147,9 +356,9 @@ def _own_liability_digits(accounts: list[dict[str, Any]]) -> set[str]:
     return digits
 
 
-def _load_consolidated_ir(data: dict[str, Any], path: Path,
+def _load_consolidated_ir(data: RawIr, path: Path,
                           start_date: str | None = None,
-                          end_date: str | None = None) -> tuple[dict[str, Any], list[Txn]]:
+                          end_date: str | None = None) -> tuple[Meta, list[Txn]]:
     """Load a consolidated IR: flatten transactions across all accounts.
 
     When *start_date* and/or *end_date* are provided, only transactions whose
@@ -193,7 +402,7 @@ def _load_consolidated_ir(data: dict[str, Any], path: Path,
                 "link_labels": list(t.get("link_labels", []) or []),
             })
     # Promote candidate self-reference rows only when a valid partner leg exists.
-    promote_internal_transfers(txns, own_digits, amount_key="amount",
+    promote_internal_transfers(cast(list[RawRowForVerifier], txns), own_digits, amount_key="amount",
                                 desc_key="description", flag_key="is_internal_transfer",
                                 own_liability_digits=own_liability_digits)
     return meta, txns
@@ -280,7 +489,7 @@ _MONTHS = {m: i for i, m in enumerate(
     ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"], start=1)}
 
 
-def parse_date_to_iso(s: Any) -> str | None:
+def parse_date_to_iso(s: object) -> str | None:
     """Normalise a statement period string to ``YYYY-MM-DD`` for the FX API.
 
     Handles the variants seen in real `.ir.json` files:
@@ -307,11 +516,11 @@ def parse_date_to_iso(s: Any) -> str | None:
 # Metrics
 # ---------------------------------------------------------------------------
 
-def compute_metrics(txns: list[Txn], meta: dict[str, Any], ccy: str,
+def compute_metrics(txns: list[Txn], meta: Meta, ccy: str,
                     opening_override: float | None = None,
                     closing_override: float | None = None,
                     use_txn_balances: bool = False,
-                    txn_categories: dict[str, str] | None = None) -> dict[str, Any]:
+                    txn_categories: dict[str, str] | None = None) -> Metrics:
     """Compute balance-sheet + cash-flow metrics for one currency in a statement.
 
     When ``opening_override``/``closing_override`` are supplied (e.g. derived
@@ -388,9 +597,9 @@ def compute_metrics(txns: list[Txn], meta: dict[str, Any], ccy: str,
     elif opening_override is not None and closing_override is not None:
         opening = opening_override
         closing = closing_override
-    elif meta.get("currency") == ccy and meta.get("opening") is not None:
-        opening = float(meta["opening"])
-        closing = float(meta["closing"])
+    elif (mc := meta.get("currency")) == ccy and (mo := meta.get("opening")) is not None:
+        opening = float(mo)
+        closing = float(meta.get("closing") or 0.0)
     elif txns:
         opening = (txns[0]["balance_after"] or 0.0) - txns[0]["amount"]
         closing = txns[-1]["balance_after"] or 0.0
@@ -417,7 +626,7 @@ def compute_metrics(txns: list[Txn], meta: dict[str, Any], ccy: str,
     }
 
 
-def build_assets(meta: dict[str, Any],
+def build_assets(meta: Meta,
                   cc_balances: dict[str, float] | None = None,
                   use_txn_balances: bool = False) -> dict[str, dict[str, float]]:
     """Assemble balance-sheet assets: cash, time deposits, investments (per currency).
@@ -485,7 +694,7 @@ def build_assets(meta: dict[str, Any],
 
 
 def _assert_drilldown_reconciles(assets: dict[str, dict[str, float]],
-                                  drilldown: list[dict[str, Any]]) -> list[str]:
+                                  drilldown: list[DrilldownRow]) -> list[str]:
     """Check that drill-down subtotals match the Balance Sheet totals.
 
     Compares per-currency, per-bucket sums from the drill-down rows against
@@ -525,11 +734,11 @@ def _assert_drilldown_reconciles(assets: dict[str, dict[str, float]],
     return warnings
 
 
-def build_balance_sheet_drilldown(raw: dict[str, Any],
+def build_balance_sheet_drilldown(raw: RawIr,
                                   cc_balances: dict[str, float] | None = None,
                                   use_txn_balances: bool = False,
                                   start_date: str | None = None,
-                                  end_date: str | None = None) -> list[dict[str, Any]]:
+                                  end_date: str | None = None) -> list[DrilldownRow]:
     """Account-level breakdown that feeds the Balance Sheet Drill-Down section.
 
     Mirrors the bucket assignment in :func:`build_assets` exactly so the
@@ -542,7 +751,7 @@ def build_balance_sheet_drilldown(raw: dict[str, Any],
     ``Dropped``. ``Dropped`` flags accounts that contribute nothing to the
     balance sheet (e.g. a liquid account whose ``closing_balance`` is null).
     """
-    rows: list[dict[str, Any]] = []
+    rows: list[DrilldownRow] = []
 
     def _add(ccy: str, inst: str, acc: str, at: str, bucket: str,
              value: float, deriv: str, carried_forward: bool = False,
@@ -570,7 +779,7 @@ def build_balance_sheet_drilldown(raw: dict[str, Any],
             if at in _LIABILITY_ACCOUNT_TYPES:
                 last_stmt = acct.get("period_to")
                 cc_txns = acct.get("transactions") or []
-                txn_dts = [t.get("posted_date") for t in cc_txns if t.get("posted_date")]
+                txn_dts = [pd for t in cc_txns if (pd := t.get("posted_date"))]
                 # Coverage window derived from the actual transactions. period_to /
                 # period_from are per-statement and unreliable once statements are
                 # merged into one account, so prefer the real posted_date extremes
@@ -681,7 +890,7 @@ def build_balance_sheet_drilldown(raw: dict[str, Any],
 def _analyze_file(path: Path,
                   start_date: str | None = None,
                   end_date: str | None = None,
-                  txn_categories: dict[str, str] | None = None) -> dict[str, Any]:
+                  txn_categories: dict[str, str] | None = None) -> AnalysisResult:
     """Analyze one statement file into a structured result.
 
     Dispatches to the consolidated analysis path (account-balance based) when
@@ -696,7 +905,7 @@ def _analyze_file(path: Path,
     the metrics computation so transfer categories (e.g. PayNow to a person) are
     honoured.
     """
-    raw = json.loads(Path(path).read_text(encoding="utf-8"))
+    raw = cast(RawIr, json.loads(Path(path).read_text(encoding="utf-8")))
     meta, txns = load_statement(path, start_date, end_date)
     use_txn_balances = bool(start_date or end_date)
     return _analyze_consolidated(raw, meta, txns, path,
@@ -705,12 +914,12 @@ def _analyze_file(path: Path,
                                  start_date=start_date, end_date=end_date)
 
 
-def _analyze_consolidated(raw: dict[str, Any], meta: dict[str, Any],
+def _analyze_consolidated(raw: RawIr, meta: Meta,
                           txns: list[Txn], path: Path,
                           use_txn_balances: bool = False,
                           txn_categories: dict[str, str] | None = None,
                           start_date: str | None = None,
-                          end_date: str | None = None) -> dict[str, Any]:
+                          end_date: str | None = None) -> AnalysisResult:
     """Consolidated IR: opening/closing come from account balances, not txns.
 
     When ``use_txn_balances`` is True (e.g. transactions have been filtered by
@@ -761,7 +970,7 @@ def _analyze_consolidated(raw: dict[str, Any], meta: dict[str, Any],
         if bal is not None and bal > 0:
             cc_balances[acc] = bal
 
-    metrics_by_ccy: dict[str, dict[str, Any]] = {}
+    metrics_by_ccy: dict[str, Metrics] = {}
     for ccy, lst in by_ccy.items():
         op = opening_by_ccy.get(ccy)
         cl = closing_by_ccy.get(ccy)
@@ -800,9 +1009,9 @@ from pfa_analysis.render_md import render_report, fmt  # noqa: E402
 # Per-file processing helper
 # ---------------------------------------------------------------------------
 
-def process_one_file(path: Path, out_dir: Path) -> dict[str, Any]:
+def process_one_file(path: Path, out_dir: Path) -> AnalysisResult:
     result = _analyze_file(path)
-    text = render_report(result)
+    text = render_report(cast(dict[str, object], result))
     out_path = out_dir / (path.stem + "_Finance_Report.md")
     out_path.parent.mkdir(parents=True, exist_ok=True)
     _ = out_path.write_text(text, encoding="utf-8")
@@ -818,7 +1027,7 @@ def build_income_expense_drilldowns(
     categories_path: Path,
     start_date: str | None = None,
     end_date: str | None = None,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+) -> tuple[list[IncomeExpenseGroup], list[IncomeExpenseGroup]]:
     """Build income/expense drilldowns for the consolidated report.
 
     Classifies every non-transfer inflow by income source and every outflow by
@@ -833,17 +1042,17 @@ def build_income_expense_drilldowns(
     the ``batch_parse`` test driver; callers (CLI ``main``, scripts) should use
     this instead of re-implementing it.
     """
-    income_drill: list[dict[str, Any]] = []
-    expense_drill: list[dict[str, Any]] = []
+    income_drill: list[IncomeExpenseGroup] = []
+    expense_drill: list[IncomeExpenseGroup] = []
     try:
         _, ir_rows = _load_ir_with_txn_id(consolidated_path, start_date, end_date)
     except Exception:
         return income_drill, expense_drill
 
     src_ccy: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
-    src_txns: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    src_txns: dict[str, list[DrilldownTxn]] = defaultdict(list)
     exp_ccy: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
-    exp_txns: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    exp_txns: dict[str, list[DrilldownTxn]] = defaultdict(list)
 
     categories: dict[str, str] = {}
     if Path(categories_path).exists():
@@ -987,7 +1196,7 @@ def _internal_transfer_ids(
     return [r.get("txn_id", "") for r in ir_rows if r.get("is_internal_transfer")]
 
 
-def _group_linked_adjacent(txns: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _group_linked_adjacent(txns: list[DrilldownTxn]) -> list[DrilldownTxn]:
     """Reorder *txns* so transactions linked via ``linked_txn_ids`` sit next to each other.
 
     Used for the internal-transfer breakdown: both legs of an own-account move
@@ -999,7 +1208,7 @@ def _group_linked_adjacent(txns: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """
     by_id = {t.get("txn_id", ""): t for t in txns}
     placed: set[str] = set()
-    ordered: list[dict[str, Any]] = []
+    ordered: list[DrilldownTxn] = []
     for t in sorted(txns, key=lambda x: -abs(float(x.get("amount", 0.0)))):
         tid = t.get("txn_id", "")
         if tid in placed:
@@ -1019,7 +1228,7 @@ def build_transfer_drilldown(
     categories_path: Path,
     start_date: str | None = None,
     end_date: str | None = None,
-) -> list[dict[str, Any]]:
+) -> list[TransferGroup]:
     """Build transfer drilldown from a consolidated IR and categories.
 
     Groups transactions by their transfer sub-category (from ``categories.json``,
@@ -1027,7 +1236,7 @@ def build_transfer_drilldown(
     flag. Returns a list of ``{"category": str, "by_currency": {ccy: amount}, "transactions": [...]}``
     dicts sorted by total absolute amount descending.
     """
-    transfer_drill: list[dict[str, Any]] = []
+    transfer_drill: list[TransferGroup] = []
     try:
         # Internal (own-account) transfers are the only thing this breakdown now
         # surfaces, so keep them in the loaded rows.
@@ -1044,7 +1253,7 @@ def build_transfer_drilldown(
             categories = {}
 
     tr_ccy: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
-    tr_txns: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    tr_txns: dict[str, list[DrilldownTxn]] = defaultdict(list)
 
     for row in ir_rows:
         txn_id = row.get("txn_id", "")
@@ -1083,7 +1292,7 @@ def build_transfer_drilldown(
     return transfer_drill
 
 
-def _empty_fx_result(base_ccy: str) -> dict[str, Any]:
+def _empty_fx_result(base_ccy: str) -> FxResult:
     """Empty realized-FX result (no conversions or load failure)."""
     return {
         "base_currency": base_ccy,
@@ -1122,7 +1331,7 @@ def compute_fx_gain_loss(
     fx_rates: dict[str, float] | None = None,
     start_date: str | None = None,
     end_date: str | None = None,
-) -> dict[str, Any]:
+) -> FxResult:
     """Compute realized FX gain/loss from currency-conversion transaction pairs.
 
     Walks every transaction whose ``link_labels`` contains
@@ -1158,7 +1367,7 @@ def compute_fx_gain_loss(
 
     total = 0.0
     by_recv: dict[str, float] = defaultdict(float)
-    pairs: list[dict[str, Any]] = []
+    pairs: list[FxPair] = []
 
     for r in rows:
         if REL_CURRENCY_CONVERSION not in (r.get("link_labels") or []):
@@ -1221,7 +1430,7 @@ def build_fx_drilldown(
     fx_rates: dict[str, float] | None = None,
     start_date: str | None = None,
     end_date: str | None = None,
-) -> dict[str, Any]:
+) -> FxResult:
     """Build the realized FX gain/loss drilldown for the consolidated report.
 
     Thin wrapper over :func:`compute_fx_gain_loss` so report/dashboard callers
@@ -1275,7 +1484,7 @@ def _classify_discretionary(category: str) -> bool:
     return _DISCRETIONARY_MAP.get(category, True)
 
 
-def _build_meta(data: dict[str, Any], path: Path) -> dict[str, Any]:
+def _build_meta(data: RawIr, path: Path) -> Meta:
     """Extract statement meta from raw IR JSON (shared by both formats).
 
     When the payload is a consolidated IR (has ``accounts[]``), the account
@@ -1283,15 +1492,15 @@ def _build_meta(data: dict[str, Any], path: Path) -> dict[str, Any]:
     the nested account structures.
     """
     sm = data.get("statement_meta", {})
-    extras: dict[str, Any] = dict(data.get("extras", {}))
-    acct_summary_list: list[dict[str, Any]] = []
-    inv_holdings_list: list[dict[str, Any]] = []
+    extras: Extras = cast(Extras, dict(data.get("extras", {})))
+    acct_summary_list: list[AccountSummaryEntry] = []
+    inv_holdings_list: list[RawHolding] = []
     # Non-consolidated IR carries these at the top level; consolidated IR
     # derives them from the nested accounts[] instead.
     if "accounts" not in data:
         acct_summary_list = list(data.get("account_summary", []) or [])
         inv_holdings_list = list(data.get("investment_holdings", []) or [])
-    meta: dict[str, Any] = {
+    meta: Meta = {
         "bank": sm.get("institution", ""),
         "account_no": sm.get("account_id", ""),
         "currency": sm.get("currency", sm.get("functional_currency", "")),
@@ -1306,7 +1515,7 @@ def _build_meta(data: dict[str, Any], path: Path) -> dict[str, Any]:
         "_consolidated": _is_consolidated(data),
     }
     if "accounts" in data:
-        time_dep_list: list[dict[str, Any]] = []
+        time_dep_list: list[TimeDeposit] = []
         for acct in data.get("accounts", []):
             ccy = acct.get("currency", "")
             atype = str(acct.get("account_type", "")).lower()
@@ -1340,7 +1549,7 @@ def _build_meta(data: dict[str, Any], path: Path) -> dict[str, Any]:
 def _load_ir_with_txn_id(path: Path,
                          start_date: str | None = None,
                          end_date: str | None = None,
-                         keep_internal: bool = False) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+                         keep_internal: bool = False) -> tuple[Meta, list[Txn]]:
     """Load a consolidated IR JSON and return (meta, flat_txn_rows_with_txn_id).
 
     Only the nested ``accounts[].transactions[]`` IR format is supported; the
@@ -1353,9 +1562,9 @@ def _load_ir_with_txn_id(path: Path,
 
     When *keep_internal* is True, internal transfers are not filtered out.
     """
-    data = json.loads(path.read_text(encoding="utf-8"))
+    data = cast(RawIr, json.loads(path.read_text(encoding="utf-8")))
     meta = _build_meta(data, path)
-    rows: list[dict[str, Any]]
+    rows: list[Txn] = []
 
     # Only the nested accounts[] IR format is supported.
     if "accounts" in data:
@@ -1396,7 +1605,7 @@ def _load_ir_with_txn_id(path: Path,
                     "linked_txn_ids": list(txn.get("linked_txn_ids", []) or []),
                 })
         # Promote candidate self-reference rows only when a valid partner leg exists.
-        promote_internal_transfers(rows, own_digits, amount_key="amount",
+        promote_internal_transfers(cast(list[RawRowForVerifier], rows), own_digits, amount_key="amount",
                                     desc_key="description", flag_key="is_internal_transfer",
                                     own_liability_digits=own_liability_digits)
         if not keep_internal:
