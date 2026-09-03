@@ -22,17 +22,6 @@ from pfa_fx import DEFAULT_FX_RATES
 # Account types that carry FD/investment records instead of spend transactions.
 _NON_TXN_ACCOUNTS = ("fixed_deposit", "unit_trust")
 
-# Canonical order of combined transaction sections. Each transaction-bearing
-# account_type gets its own section so credit cards / e-wallets / SRS, etc. are
-# not folded into "Current Account Transactions".
-TXN_SECTION_ORDER: list[tuple[str, str]] = [
-    ("current", "Current Account Transactions"),
-    ("credit_card", "Credit Card Transactions"),
-    ("ewallet", "E-wallet Transactions"),
-    ("srs", "SRS Transactions"),
-    ("unknown", "Other Account Transactions"),
-]
-
 
 @dataclass
 class TxnRow:
@@ -231,51 +220,4 @@ def build_render_model(stmt: Any, fx_rates: dict[str, float] | None = None) -> R
         txn_tables_by_type=txn_tables_by_type,
         accounts=stmt.accounts,
         warnings=stmt.warnings,
-    )
-
-
-def render_model_from_dict(d: dict[str, Any]) -> "RenderModel":
-    """Inverse of :meth:`RenderModel.to_dict`.
-
-    Used by Python-side consumers (tests, validators) that load the de-identified
-    export and want a typed ``RenderModel`` back. ``accounts`` arrive already
-    projected, so they are kept as plain dicts.
-    """
-    def _row(rd: dict[str, Any]) -> TxnRow:
-        return TxnRow(
-            date=rd.get("date", ""),
-            bank=rd.get("bank", ""),
-            account=rd.get("account", ""),
-            description=rd.get("description", ""),
-            withdrawal=rd.get("withdrawal"),
-            deposit=rd.get("deposit"),
-            balance_after=rd.get("balance_after"),
-            net_deposits=rd.get("net_deposits"),
-            txn_id=rd.get("txn_id", ""),
-            currency=rd.get("currency", ""),
-            category=rd.get("category", ""),
-        )
-
-    txn_tables_by_type = {
-        atype: [
-            CurrencyTable(
-                currency=ct.get("currency", ""),
-                rows=[_row(r) for r in ct.get("rows", [])],
-            )
-            for ct in tables
-        ]
-        for atype, tables in d.get("txn_tables_by_type", {}).items()
-    }
-    return RenderModel(
-        ir_version=d.get("ir_version", ""),
-        sources=d.get("sources", []),
-        institutions=d.get("institutions", []),
-        period_from=d.get("period_from"),
-        period_to=d.get("period_to"),
-        net_sgd=d.get("net_sgd", 0.0),
-        per_ccy_balances=d.get("per_ccy_balances", {}),
-        fx_rates=d.get("fx_rates", {}),
-        txn_tables_by_type=txn_tables_by_type,
-        accounts=d.get("accounts", []),
-        warnings=d.get("warnings", []),
     )

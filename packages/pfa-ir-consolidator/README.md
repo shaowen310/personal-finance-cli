@@ -1,13 +1,14 @@
 # pfa-ir-consolidator
 
 Consolidate multiple bank-statement IR JSON files (`*.ir.json`) into a single
-consolidated IR and render it as a human-readable, cross-bank Markdown summary.
+consolidated IR ready for analysis and reporting.
 
 This package takes the per-statement `ParsedStatement` objects produced by
 [`pfa-parser`](../pfa-parser), merges them, detects internal transfers between
-accounts/banks, applies FX conversion, and renders a consolidated report. It is
+accounts/banks, and applies FX conversion. It is
 the middle stage of the `personal-finance-cli` pipeline (between `pfa-parser`
-and the analysis package).
+and the analysis package; report rendering — including the balance sheet and
+net position — lives in [`pfa-analysis`](../pfa-analysis)).
 
 The original `bank-ir-consolidate` skill has been absorbed into this package.
 
@@ -23,8 +24,8 @@ The original `bank-ir-consolidate` skill has been absorbed into this package.
   rates (with cache + fallback), never crashes on network failure.
 - **Category merge** — fold categorizer output (`categories.json`, produced
   by `pfa-analysis`) back into the consolidated IR.
-- **Render** — emit a cross-bank Markdown summary (net position, per-account
-  tables, FD records, investment holdings) with masking on by default.
+- **Render model** — build/serialize the de-identified `RenderModel` JSON that
+  `pfa-analysis` categorization consumes.
 
 ## Supported inputs
 
@@ -60,42 +61,18 @@ python -m pfa_ir_consolidator.consolidate a.ir.json b.ir.json c.ir.json -o conso
 
 Options: `-o/--output`, `--min-ir-version VER`, `--no-dedup`, `--indent N`.
 
-### 2. Render to Markdown
-
-```bash
-python -m pfa_ir_consolidator.render_md consolidated.ir.json -o consolidated.md
-```
-
-- Net Position (SGD-equivalent via FX rates, plus per-currency native
-  balances).
-- Per-bank, per-account transaction tables, FD records, investment holdings.
-- Masking on by default; use `--no-mask` to disable.
-
-Options: `-o/--output`, `--no-mask`, `--fx-date YYYY-MM-DD`,
-`--fx-cache-dir DIR`, `--fx-provider NAME` (default `frankfurter`),
-`--fx-offline`, `--fx-force-refresh`, `--fx-no-embed`.
-
 ### FX rates (on-demand, cached)
 
-- FX rates are **not hardcoded**; fetched live at render time.
-- Fetches mid-market SGD-per-unit rates for built-in watch-list
-  (`USD, JPY, CNY`) + every non-SGD currency in accounts.
-- Cached per `(provider, date)` under `--fx-cache-dir` (default `./cache/`,
-  git-ignored).
+- FX rates are **not hardcoded**; `consolidate` fetches them via
+  [`pfa-fx`](../pfa-fx) and embeds them into the consolidated IR.
+- Fetches mid-market SGD-per-unit rates for every non-SGD currency in the
+  accounts, cached per `(provider, date)`.
 - Default provider: **Frankfurter** (`https://api.frankfurter.dev`, free,
   keyless, historical dates supported).
-
-```bash
-python -m pfa_ir_consolidator.render_md consolidated.ir.json -o consolidated.md \
-  --fx-date 2026-06-30 --fx-provider frankfurter --fx-cache-dir ./cache
-```
-
-- Falls back: network fail → previous cache → hardcoded `DEFAULT_FX_RATES`
-  (never crashes).
-- Weekend/holiday: steps back up to 5 days to the last trading day.
-- FX provenance embedded into `extras.consolidation.fx` (skip with
-  `--fx-no-embed`). The Markdown FX table shows live / cached / fallback +
-  effective date.
+- Falls back: network fail → previous cache → hardcoded defaults (never
+  crashes). Weekend/holiday: steps back up to 5 days to the last trading day.
+- FX provenance is stored in `extras.consolidation.fx` so downstream rendering
+  and the categorizer never need to hit the network again.
 
 ## Programmatic API
 
@@ -136,7 +113,6 @@ pfa-ir-consolidator/
         ├── consolidate.py    # merge + dedup + provenance
         ├── link_transfers.py  # inter/intra-bank, currency conversion, CC payment linking
         ├── fx_rates.py       # back-compat shim → pfa-fx (live FX fetch + cache + fallback)
-        ├── render_md.py      # consolidated IR -> Markdown
         ├── render_model.py   # in-memory render model
         ├── render_model_io.py
         ├── export_model.py   # consolidated IR -> RenderModel JSON (for categorizer)
