@@ -48,12 +48,14 @@ from __future__ import annotations
 
 import re
 from collections import Counter
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, TypedDict, cast
+from typing import TypedDict, cast
 
 from pfa_ir_schema import AccountType, ParsedStatement, Transaction, from_json
 from pfa_ir_schema.common import _fd_day_count, _parse_fd_date, parse_fd_rate
+
 
 # A transaction row as understood by the verifier. ``pfa-analysis`` passes plain
 # dicts; ``ParsedStatement`` is flattened to the same shape. The canonical row is
@@ -83,16 +85,17 @@ RawRow = dict[str, str | float | bool | None | list[str]]
 
 
 # Any IR input the verifier accepts: a ParsedStatement, a raw IR dict, a flat
-# list of txn rows, or a file path. The dict/list members use ``Any`` (as the
-# verifier's original contract did) because the flat row shape is shared across
-# packages as *different* TypedDicts (e.g. ``pfa-analysis``'s ``TxnRow``); a
-# narrower value type such as ``object`` would reject those callers under
-# ``list`` invariance, forcing casts at every call site. ``RawRow`` (below) is the
-# concrete flat-row shape accepted by ``promote_internal_transfers``.
+# list of txn rows, or a file path. The dynamic branches use the *covariant*
+# abstract containers ``Mapping[str, object]`` / ``Sequence[object]`` rather than
+# ``dict[str, Any]`` / ``list[Any]``: the flat row shape is shared across packages
+# as *different* TypedDicts (e.g. ``pfa-analysis``'s ``TxnRow``), and covariance
+# lets those callers assign without casts (invariant ``dict``/``list`` would force
+# a cast at every call site). ``RawRow`` (below) is the concrete flat-row shape
+# accepted by ``promote_internal_transfers``.
 IrInput = (
     ParsedStatement
-    | dict[str, Any]
-    | list[Any]
+    | Mapping[str, object]
+    | Sequence[object]
     | str
     | Path
 )
