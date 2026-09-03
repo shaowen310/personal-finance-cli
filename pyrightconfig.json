@@ -42,13 +42,12 @@
     "packages/pfa-analysis/src",
     "apps/pfa-cli/src"
   ],
-  // Kept permissive globally: the monorepo layout relies on explicit
-  // package-root imports rather than the implicit-relative form.
-  "reportImplicitRelativeImport": "none",
   "executionEnvironments": [
     {
       // Default environment: strict checks for all packages.
-      "root": "."
+      "root": ".",
+      "reportUnusedImport": "error",
+      "reportUnusedVariable": "error"
     },
     {
       // pfa-parser depends on pdfplumber (and pulls in pandas / click in
