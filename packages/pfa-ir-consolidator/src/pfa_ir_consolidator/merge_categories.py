@@ -34,30 +34,56 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Any
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 
-import pfa_ir_schema  # noqa: E402
-from pfa_ir_consolidator.render_model import build_render_model  # noqa: E402
-from pfa_ir_consolidator.render_model_io import (  # noqa: E402
+import pfa_ir_schema
+
+# JSONValue lives in the schema submodule but is not re-exported by the
+# package __init__; import it directly for the model-dict annotations below.
+from pfa_ir_schema.ir_schema import JSONValue
+
+from pfa_ir_consolidator.render_model import build_render_model
+from pfa_ir_consolidator.render_model_io import (
     embedded_fx_rates,
     load_render_model,
     save_render_model,
 )
 
 
-def _export_txn_ids(model: dict[str, Any]) -> set[str]:
-    ids: set[str] = set()
-    for tables in model.get("txn_tables_by_type", {}).values():
+def _iter_model_rows(model: dict[str, JSONValue]) -> Iterator[dict[str, JSONValue]]:
+    """Yield every row dict under ``model["txn_tables_by_type"][*]["rows"]``.
+
+    The RenderModel interchange is plain JSON, so each level is narrowed with
+    ``isinstance`` before descending; malformed levels are skipped.
+    """
+    tables_by_type = model.get("txn_tables_by_type")
+    if not isinstance(tables_by_type, dict):
+        return
+    for tables in tables_by_type.values():
+        if not isinstance(tables, list):
+            continue
         for tbl in tables:
-            for row in tbl.get("rows", []):
-                tid = row.get("txn_id")
-                if tid:
-                    ids.add(tid)
+            if not isinstance(tbl, dict):
+                continue
+            rows = tbl.get("rows")
+            if not isinstance(rows, list):
+                continue
+            for row in rows:
+                if isinstance(row, dict):
+                    yield row
+
+
+def _export_txn_ids(model: dict[str, JSONValue]) -> set[str]:
+    ids: set[str] = set()
+    for row in _iter_model_rows(model):
+        tid = row.get("txn_id")
+        if tid:
+            ids.add(str(tid))
     return ids
 
 
@@ -83,14 +109,12 @@ def _is_transfer_category(cat: str) -> bool:
     return cat.strip().lower().startswith("transfer")
 
 
-def _inject_into_model(model: dict[str, Any], cat_map: dict[str, str]) -> None:
+def _inject_into_model(model: dict[str, JSONValue], cat_map: dict[str, str]) -> None:
     """Stamp each TxnRow with its category so the merged export is self-describing."""
-    for tables in model.get("txn_tables_by_type", {}).values():
-        for tbl in tables:
-            for row in tbl.get("rows", []):
-                tid = row.get("txn_id")
-                if tid in cat_map:
-                    row["category"] = cat_map[tid]
+    for row in _iter_model_rows(model):
+        tid = row.get("txn_id")
+        if tid is not None and str(tid) in cat_map:
+            row["category"] = cat_map[str(tid)]
 
 
 def main() -> None:
@@ -167,12 +191,12 @@ def main() -> None:
         if missing and not args.allow_uncategorized:
             errors.append(
                 f"coverage gap: {len(missing)} exported txn_id(s) left "+
-                f"uncategorized"
+                "uncategorized"
             )
         if extra:
             errors.append(
                 f"{len(extra)} txn_id(s) in categories.json were not in the "+
-                f"export (cannot be matched)"
+                "export (cannot be matched)"
             )
     if errors:
         for e in errors:
