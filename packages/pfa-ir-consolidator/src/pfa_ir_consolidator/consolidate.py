@@ -19,32 +19,37 @@ from typing import TypedDict, cast
 # Allow running as a standalone script from scripts/ or the repo root.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from pfa_ir_schema import (  # noqa: E402
+from pfa_ir_schema import (
     Account,
     FixedDepositRecord,
     InvestmentHolding,
-    ParserInfo,
     ParsedStatement,
+    ParserInfo,
     StatementMeta,
-    Transaction
+    Transaction,
 )
 
-from pfa_ir_consolidator.link_transfers import (  # noqa: E402
+# JSONValue lives in the schema submodule but is not re-exported by the
+# package __init__; import it directly for the extras casts below.
+from pfa_ir_schema.ir_schema import JSONValue
+
+# Internal-transfer verification (promotion, link integrity, orphan reconcile)
+# now lives in pfa-ir-verifier — the canonical home for all IR verification.
+# Apply the full ordered pipeline here so the persisted consolidated IR already
+# carries correct flags/links and any surviving orphans are demoted.
+from pfa_ir_verifier import (
+    RawRow,
+    demote_orphan_internal_transfers,
+    promote_internal_transfers,
+    verify_txn_links,
+)
+
+from pfa_ir_consolidator.link_transfers import (
     link_cc_payments,
     link_currency_conversions,
     link_inter_bank_transfers,
     link_intra_bank_transfers,
     link_investment_transfers,
-)
-# Internal-transfer verification (promotion, link integrity, orphan reconcile)
-# now lives in pfa-ir-verifier — the canonical home for all IR verification.
-# Apply the full ordered pipeline here so the persisted consolidated IR already
-# carries correct flags/links and any surviving orphans are demoted.
-from pfa_ir_verifier import (  # noqa: E402
-    RawRow,
-    demote_orphan_internal_transfers,
-    promote_internal_transfers,
-    verify_txn_links,
 )
 
 VERSION = "0.1.0"
@@ -101,7 +106,7 @@ def _to_iso_date(value: str | None) -> str | None:
         # token is an alphabetic month abbreviation.
         if a.isdigit() and b.isalpha() and c.isdigit():
             try:
-                return datetime.strptime(f"{a}-{b}-{c}", "%d-%b-%Y").strftime("%Y-%m-%d")
+                return datetime.strptime(f"{a}-{b}-{c}", "%d-%b-%Y").strftime("%Y-%m-%d")  # noqa: DTZ007 -- date-only normalization, no tz semantics
             except ValueError:
                 return value
     return value
@@ -112,7 +117,7 @@ def _is_iso_date(value: str | None) -> bool:
     if not value:
         return False
     try:
-        _ = datetime.strptime(str(value).strip(), "%Y-%m-%d")
+        _ = datetime.strptime(str(value).strip(), "%Y-%m-%d")  # noqa: DTZ007 -- validation only, parsed value discarded
         return True
     except ValueError:
         return False
@@ -316,14 +321,16 @@ def consolidate_statements(
         statement_meta=meta,
         accounts=merged_accounts,
         warnings=warnings,
-        extras={
+        # The literal's inferred nested dict types are not assignable to
+        # dict[str, JSONValue] (dict invariance); cast the block explicitly.
+        extras=cast("dict[str, JSONValue]", {
             "consolidation": {
                 "sources": sources,
                 "deduped": deduped,
                 "filtered": filtered,
                 "n_inputs": len(stmts_with_paths),
             }
-        },
+        }),
     )
 
     # Post-consolidation relationship pipeline. consolidate_statements owns the
@@ -396,12 +403,13 @@ def embed_fx_rates(
         print(f"[WARN] embed_fx_rates: FX fetch failed: {e}", file=sys.stderr)
 
     extras = dict(consolidated.extras or {})
-    consolid = dict(extras.get("consolidation") or {})
-    consolid["fx"] = {
+    # extras values are JSONValue (may be list/num/None); narrow before use.
+    consolid = dict(cast("dict[str, JSONValue]", extras.get("consolidation") or {}))
+    consolid["fx"] = cast("dict[str, JSONValue]", {
         "rates_sgd_per_unit": rates_sgd_per_unit,
         "as_of": as_of or "",
         "source": source,
-    }
+    })
     extras["consolidation"] = consolid
     consolidated.extras = extras
     return consolidated
