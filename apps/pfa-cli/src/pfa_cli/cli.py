@@ -2,18 +2,17 @@
 
 import sys
 from pathlib import Path
+from typing import cast
 
 import click
-
-from pfa_parser import SGBankPDFParser
-from pfa_ir_schema import ParsedStatement, from_json
-
 from pfa_ir_consolidator import (
     consolidate_statements,
     embed_fx_rates,
 )
+from pfa_ir_schema import ParsedStatement, from_json
+from pfa_parser import SGBankPDFParser
 
-from pfa_cli.dates import parse_month, parse_start_date, parse_end_date
+from pfa_cli.dates import parse_end_date, parse_month, parse_start_date
 
 DEFAULT_MIN_IR_VERSION = "2026.4"
 
@@ -28,7 +27,6 @@ def _version_ge(a: str, b: str) -> bool:
 @click.group()
 def cli() -> None:
     """Personal Finance CLI — track your money."""
-    pass
 
 
 @cli.command()
@@ -201,7 +199,8 @@ def consolidate(inputs: tuple[str, ...], out_path: str, min_ir_version: str,
     )
     consolidated = embed_fx_rates(consolidated)
 
-    transfers = (consolidated.extras or {}).get("consolidation", {}).get("transfers", {})
+    consolidation = cast("dict[str, object]", (consolidated.extras or {}).get("consolidation", {}))
+    transfers = cast("dict[str, object]", consolidation.get("transfers", {}))
     inter_bank_detected = transfers.get("inter_bank_detected", 0)
     intra_bank_detected = transfers.get("intra_bank_detected", 0)
     cc_detected = transfers.get("currency_conversion_detected", 0)
