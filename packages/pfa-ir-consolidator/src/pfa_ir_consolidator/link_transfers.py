@@ -57,8 +57,12 @@ transaction). Read-only / warning-only checks use ``find_*`` / ``verify_*`` inst
 from __future__ import annotations
 
 import re
+from typing import cast
 
-
+# JSONValue lives in the schema submodule but is not re-exported by the
+# package __init__; import it directly for the extras casts below.
+from pfa_ir_schema import Account, ParsedStatement, Transaction, generate_txn_id
+from pfa_ir_schema.ir_schema import JSONValue
 from pfa_ir_schema.relations import (
     REL_CC_PAYMENT,
     REL_CURRENCY_CONVERSION,
@@ -66,7 +70,6 @@ from pfa_ir_schema.relations import (
     REL_INTRA_BANK,
     REL_INVESTMENT_TRANSFER,
 )
-from pfa_ir_schema import Account, ParsedStatement, Transaction, generate_txn_id
 
 # Keywords that mark a transaction as a genuine transfer (as opposed to an
 # ordinary spend/income that merely happens to be opposite another transaction
@@ -83,6 +86,22 @@ _TRANSFER_KEYWORD_RE = re.compile(
 def _is_transfer_like(description: str) -> bool:
     """Return True if the description looks like a transfer between accounts."""
     return bool(_TRANSFER_KEYWORD_RE.search(description or ""))
+
+
+def _record_detection_stat(statement: ParsedStatement, key: str, value: JSONValue) -> None:
+    """Record a detection counter under ``extras["consolidation"]["transfers"][key]``.
+
+    ``extras`` values are ``JSONValue`` (may be list/num/None), so the nested
+    dicts are narrowed with ``cast`` before use; every level is copied first so
+    the original dict tree is never mutated in place.
+    """
+    extras = dict(statement.extras or {})
+    cons = dict(cast("dict[str, JSONValue]", extras.get("consolidation", {}) or {}))
+    transfers_extras = dict(cast("dict[str, JSONValue]", cons.get("transfers", {}) or {}))
+    transfers_extras[key] = value
+    cons["transfers"] = transfers_extras
+    extras["consolidation"] = cons
+    statement.extras = extras
 
 
 # Account types treated as the user's own investment accounts. A transfer from
@@ -200,13 +219,7 @@ def link_inter_bank_transfers(statement: ParsedStatement) -> ParsedStatement:
                 break  # One match per txn_a; move to next txn_a.
 
     # Record detection stats in extras.
-    extras = dict(statement.extras or {})
-    cons = dict(extras.get("consolidation", {}) or {})
-    transfers_extras = dict(cons.get("transfers", {}) or {})
-    transfers_extras["inter_bank_detected"] = matched_pairs
-    cons["transfers"] = transfers_extras
-    extras["consolidation"] = cons
-    statement.extras = extras
+    _record_detection_stat(statement, "inter_bank_detected", matched_pairs)
 
     return statement
 
@@ -345,13 +358,7 @@ def link_intra_bank_transfers(statement: ParsedStatement) -> ParsedStatement:
                 break  # One match per txn_a; move to next txn_a.
 
     # Record detection stats in extras.
-    extras = dict(statement.extras or {})
-    cons = dict(extras.get("consolidation", {}) or {})
-    transfers_extras = dict(cons.get("transfers", {}) or {})
-    transfers_extras["intra_bank_detected"] = matched_pairs
-    cons["transfers"] = transfers_extras
-    extras["consolidation"] = cons
-    statement.extras = extras
+    _record_detection_stat(statement, "intra_bank_detected", matched_pairs)
 
     return statement
 
@@ -474,13 +481,7 @@ def link_currency_conversions(statement: ParsedStatement) -> ParsedStatement:
             statement.warnings.append(warn)
 
     # Record detection stats in extras.
-    extras = dict(statement.extras or {})
-    cons = dict(extras.get("consolidation", {}) or {})
-    transfers_extras = dict(cons.get("transfers", {}) or {})
-    transfers_extras["currency_conversion_detected"] = matched_pairs
-    cons["transfers"] = transfers_extras
-    extras["consolidation"] = cons
-    statement.extras = extras
+    _record_detection_stat(statement, "currency_conversion_detected", matched_pairs)
 
     return statement
 
@@ -602,13 +603,7 @@ def link_cc_payments(statement: ParsedStatement) -> ParsedStatement:
                 break  # One match per txn_a; move to next txn_a.
 
     # Record detection stats in extras.
-    extras = dict(statement.extras or {})
-    cons = dict(extras.get("consolidation", {}) or {})
-    transfers_extras = dict(cons.get("transfers", {}) or {})
-    transfers_extras["cc_payments_detected"] = matched_pairs
-    cons["transfers"] = transfers_extras
-    extras["consolidation"] = cons
-    statement.extras = extras
+    _record_detection_stat(statement, "cc_payments_detected", matched_pairs)
 
     return statement
 
@@ -797,13 +792,7 @@ def link_investment_transfers(statement: ParsedStatement) -> ParsedStatement:
                 statement.warnings.append(warn)
 
     # Record detection stats in extras.
-    extras = dict(statement.extras or {})
-    cons = dict(extras.get("consolidation", {}) or {})
-    transfers_extras = dict(cons.get("transfers", {}) or {})
-    transfers_extras["investment_detected"] = matched
-    transfers_extras["investment_synthesized"] = matched_single
-    cons["transfers"] = transfers_extras
-    extras["consolidation"] = cons
-    statement.extras = extras
+    _record_detection_stat(statement, "investment_detected", matched)
+    _record_detection_stat(statement, "investment_synthesized", matched_single)
 
     return statement
