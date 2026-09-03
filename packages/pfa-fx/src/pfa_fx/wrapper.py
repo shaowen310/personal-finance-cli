@@ -12,9 +12,9 @@ offline across report runs and months.
 
 from __future__ import annotations
 
-from typing import Any, TypedDict, cast
+from typing import TypedDict, cast
 
-from .cache import load_cache, save_cache
+from .cache import cache_get, cache_put
 from .defaults import DEFAULT_WATCH_SYMBOLS
 from .rates import FXResult, get_fx_rates
 
@@ -39,16 +39,13 @@ def _wrapper_cache_get(date_str: str) -> FxWrapper | None:
     for offline reuse (distinct from the 1-day TTL on raw provider fetches in
     :mod:`pfa_fx.cache`).
     """
-    cache = load_cache()
-    entry = cache.get("entries", {}).get("wrapper", {}).get(date_str)
+    entry = cache_get("wrapper", date_str)
     return cast(FxWrapper, entry) if isinstance(entry, dict) else None
 
 
 def _wrapper_cache_put(date_str: str, wrapper: FxWrapper) -> None:
     """Persist *wrapper* under the ``wrapper`` bucket for offline reuse."""
-    cache = load_cache()
-    cache.setdefault("entries", {}).setdefault("wrapper", {})[date_str] = wrapper
-    save_cache(cache)
+    cache_put("wrapper", date_str, wrapper)
 
 
 def fx_result_to_wrapper(result: FXResult) -> FxWrapper:

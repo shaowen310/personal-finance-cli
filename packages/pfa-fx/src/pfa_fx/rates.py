@@ -9,6 +9,7 @@ import json
 import logging
 import os
 from dataclasses import dataclass, field
+from typing import Mapping, TypedDict, cast
 
 from .cache import cache_get, cache_put
 from .defaults import BASE_CCY, DEFAULT_FX_RATES
@@ -43,6 +44,15 @@ class FXResult:
     missing: list[str] = field(default_factory=list)
 
 
+class RateCacheEntry(TypedDict):
+    """A single currency's cached FX entry (permanently valid once stored)."""
+
+    rate: float
+    source: str
+    as_of: str
+    fetched_at: float
+
+
 def collect_currencies(stmt: object) -> list[str]:
     """Collect distinct non-SGD currency codes from a statement-like object.
 
@@ -70,7 +80,7 @@ def collect_currencies(stmt: object) -> list[str]:
     return sorted(currencies)
 
 
-def _invert_to_sgd_per_unit(raw: dict[str, object], _as_of: str = "") -> dict[str, float]:
+def _invert_to_sgd_per_unit(raw: Mapping[str, object], _as_of: str = "") -> dict[str, float]:
     """Convert Frankfurter's units-per-SGD into canonical SGD-per-unit.
 
     ``raw["rates"][ccy]`` = how many *ccy* per 1 SGD. We want SGD per 1 ccy,
@@ -190,12 +200,13 @@ def get_fx_rates(
                     }
                     cache_put(prov_name, cache_key, entry)
         if entry is not None:
+            cached = cast(RateCacheEntry, entry)
             try:
-                rates[ccy] = float(entry["rate"])
+                rates[ccy] = float(cached["rate"])
                 if not source:
-                    source = str(entry.get("source", prov_name))
+                    source = str(cached.get("source", prov_name))
                 if not fetched_at:
-                    fetched_at = float(entry.get("fetched_at", 0.0))
+                    fetched_at = float(cached.get("fetched_at", 0.0))
                 continue
             except (TypeError, ValueError, KeyError):
                 pass

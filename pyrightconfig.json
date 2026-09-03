@@ -31,30 +31,37 @@
   "typeCheckingMode": "standard",
   // Monorepo: each package uses a hatch src/ layout, so expose every
   // package root to let cross-package imports (and package tests) resolve
-  // without installing the packages into an interpreter.
+  // without installing the packages into an interpreter. Declared at the top
+  // level so every execution environment inherits it.
+  "extraPaths": [
+    "packages/pfa-ir-schema/src",
+    "packages/pfa-fx/src",
+    "packages/pfa-parser/src",
+    "packages/pfa-ir-consolidator/src",
+    "packages/pfa-ir-verifier/src",
+    "packages/pfa-analysis/src",
+    "apps/pfa-cli/src"
+  ],
+  // Kept permissive globally: the monorepo layout relies on explicit
+  // package-root imports rather than the implicit-relative form.
+  "reportImplicitRelativeImport": "none",
   "executionEnvironments": [
     {
-      "root": ".",
-      "extraPaths": [
-        "packages/pfa-ir-schema/src",
-        "packages/pfa-fx/src",
-        "packages/pfa-parser/src",
-        "packages/pfa-ir-consolidator/src",
-        "packages/pfa-ir-verifier/src",
-        "packages/pfa-analysis/src",
-        "apps/pfa-cli/src"
-      ]
+      // Default environment: strict checks for all packages.
+      "root": "."
+    },
+    {
+      // pfa-parser depends on pdfplumber (and pulls in pandas / click in
+      // places), which ship little typing metadata. Keep its checks permissive;
+      // tighten gradually as type coverage improves.
+      "root": "packages/pfa-parser",
+      "reportAny": "none",
+      "reportExplicitAny": "none",
+      "reportUnknownVariableType": "none",
+      "reportUnknownArgumentType": "none",
+      "reportUnknownMemberType": "none",
+      "reportMissingTypeStubs": "none",
+      "reportTypedDictNotRequiredAccess": "none"
     }
-  ],
-  // Deliberate relaxations: the project depends on pandas / pdfplumber /
-  // click, which ship little typing metadata. Keep them permissive and
-  // tighten gradually as type coverage improves.
-  "reportImplicitRelativeImport": "none",
-  "reportTypedDictNotRequiredAccess": "none",
-  "reportAny": "none",
-  "reportExplicitAny": "none",
-  "reportUnknownVariableType": "none",
-  "reportUnknownArgumentType": "none",
-  "reportUnknownMemberType": "none",
-  "reportMissingTypeStubs": "none"
+  ]
 }
