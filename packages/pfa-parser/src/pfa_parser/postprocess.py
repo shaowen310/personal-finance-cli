@@ -9,6 +9,7 @@ auditable, and the renderers can stay dumb (read ``t.balance_after`` directly).
 from __future__ import annotations
 
 import re
+from typing import cast
 
 from pfa_ir_schema import (
     Account,
@@ -21,6 +22,7 @@ from pfa_ir_schema.relations import (
     REL_FD_INTEREST,
     REL_FD_PRINCIPAL,
 )
+
 # Statement-level verification passes (verify_fd_interest_amounts, verify_account_balances,
 # verify_statement_meta, verify_txn_links) live in pfa-ir-verifier (the canonical
 # home for IR verification); re-use them here. FD<->CA *linking* (link_fd_to_ca) is
@@ -87,7 +89,7 @@ def fill_fd_running_balances(statement: ParsedStatement) -> ParsedStatement:
             t.balance_after = bal
 
         statement.warnings.append(
-            f"Inferred opening_balance for fixed-deposit account "+
+            "Inferred opening_balance for fixed-deposit account "+
             f"'{acct.name}' ({acct.account_no}, {acct.currency or '?'}): "+
             f"opening {opening:,.2f} across {len(txns)} transactions."
         )
@@ -151,9 +153,11 @@ def link_fd_to_ca(statement: ParsedStatement) -> ParsedStatement:
         for fd_txn in acct.transactions:
             if not fd_txn.posted_date:
                 continue
-            deposit_no = (fd_txn.extras or {}).get("fd_link", {}).get(
-                "deposit_no", ""
-            )
+            # ``extras`` values are JSONValue (may be list/num/None), so narrow
+            # the nested fd_link dict and coerce the deposit_no to str — it is
+            # used as part of the (str, str) grouping key below.
+            fd_link = cast("dict[str, object]", (fd_txn.extras or {}).get("fd_link", {}))
+            deposit_no = str(fd_link.get("deposit_no") or "")
             groups.setdefault((deposit_no, fd_txn.posted_date), []).append(fd_txn)
 
         for (deposit_no, posted_date), fd_legs in groups.items():
@@ -233,7 +237,7 @@ def link_fd_to_ca(statement: ParsedStatement) -> ParsedStatement:
                     )
                 else:
                     desc = fl.description or ""
-                    if re.search(r"renew|rollover", desc, re.I):
+                    if re.search(r"renew|rollover", desc, re.IGNORECASE):
                         _ = _synthesize_ca_twin(statement, fl)
                     else:
                         fl.is_internal_transfer = False
@@ -272,13 +276,14 @@ def _link_fd_ca(ca_txn: Transaction, fd_leg: Transaction,
     for lbl in (fd_leg.link_labels or []):
         if lbl not in ca_txn.link_labels:
             ca_txn.link_labels = list(ca_txn.link_labels) + [lbl]
-    # Mirror the fd_link extras onto the twin for traceability.
-    fd_link = (fd_leg.extras or {}).get("fd_link", {})
+    # Mirror the fd_link extras onto the twin for traceability. Values are
+    # coerced to str so the literal stays assignable to dict[str, JSONValue].
+    fd_link = cast("dict[str, object]", (fd_leg.extras or {}).get("fd_link", {}))
     ca_txn.extras = {
         **(ca_txn.extras or {}),
         "fd_link": {
-            "fd_account_no": fd_link.get("fd_account_no", ""),
-            "deposit_no": fd_link.get("deposit_no", ""),
+            "fd_account_no": str(fd_link.get("fd_account_no") or ""),
+            "deposit_no": str(fd_link.get("deposit_no") or ""),
             "matched_on": matched_on,
         },
     }

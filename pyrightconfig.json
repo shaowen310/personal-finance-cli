@@ -29,6 +29,15 @@
   // Explicit baseline so effective strictness stays stable across pyright
   // upgrades (the framework default is "standard").
   "typeCheckingMode": "standard",
+  // Default diagnostics applied to every package. Per-package overrides live
+  // in ``executionEnvironments`` below (a sub-environment's setting replaces
+  // these for files under its root). Declaring the defaults at the top level
+  // rather than as a ``root: "."`` execution environment avoids the root "."
+  // matching every file first and shadowing the more-specific sub-environments
+  // (e.g. pfa-parser's permissive settings were being ignored).
+  "reportUnusedImport": "warning",
+  "reportUnusedVariable": "warning",
+  "reportExplicitAny": "error",
   // Monorepo: each package uses a hatch src/ layout, so expose every
   // package root to let cross-package imports (and package tests) resolve
   // without installing the packages into an interpreter. Declared at the top
@@ -43,13 +52,6 @@
     "apps/pfa-cli/src"
   ],
   "executionEnvironments": [
-    {
-      // Default environment: strict checks for all packages.
-      "root": ".",
-      "reportUnusedImport": "warning",
-      "reportUnusedVariable": "warning",
-      "reportExplicitAny": "error"
-    },
     {
       // pfa-parser depends on pdfplumber (and pulls in pandas / click in
       // places), which ship little typing metadata. Keep its checks permissive;

@@ -50,11 +50,13 @@ from pfa_ir_schema import (
     Transaction,
     generate_txn_id,
     parse_fd_rate,
+)
+from pfa_ir_schema import (
     to_json as ir_to_json,
 )
 
 
-def _fd_records_complementary(existing: "FixedDepositRecord", new_principal: float,
+def _fd_records_complementary(existing: FixedDepositRecord, new_principal: float,
                               new_interest_amount: float | None) -> bool:
     """Return True if ``new`` carries the field ``existing`` is missing.
 
@@ -66,11 +68,11 @@ def _fd_records_complementary(existing: "FixedDepositRecord", new_principal: flo
     existing_interest = bool(existing.interest_amount)
     new_principal_b = bool(new_principal)
     new_interest_b = bool(new_interest_amount)
-    if existing_principal and new_interest_b and not existing_interest:
-        return True
-    if existing_interest and new_principal_b and not existing_principal:
-        return True
-    return False
+    # Complementary pair: one record carries principal-only, the other interest-only.
+    return (
+        (existing_principal and new_interest_b and not existing_interest)
+        or (existing_interest and new_principal_b and not existing_principal)
+    )
 
 
 class IRBuilder:
@@ -95,7 +97,7 @@ class IRBuilder:
 
     # -- Chainable setters ---------------------------------------------------
 
-    def set_source(self, path: str) -> "IRBuilder":
+    def set_source(self, path: str) -> IRBuilder:
         """Record the source PDF filename (directory stripped)."""
         self._source_file = os.path.basename(path)
         return self
@@ -106,7 +108,7 @@ class IRBuilder:
         institution: str = "",
         account_holder: str | None = None,
         functional_currency: str = "",
-    ) -> "IRBuilder":
+    ) -> IRBuilder:
         """Set statement-level metadata (institution, holder, functional currency)."""
         self._meta.institution = institution
         self._meta.account_holder = account_holder
@@ -126,7 +128,7 @@ class IRBuilder:
         closing_balance: float | None = None,
         extras: dict[str, Any] | None = None,
         investment_holdings: list[InvestmentHolding] | None = None,
-    ) -> "IRBuilder":
+    ) -> IRBuilder:
         """Append an ``Account`` and make it the active account for transactions.
 
         Subsequent ``add_transaction`` / ``add_transaction_dict`` calls route
@@ -159,7 +161,7 @@ class IRBuilder:
             self._functional_currency = currency
         return self
 
-    def set_period(self, period_from: str, period_to: str) -> "IRBuilder":
+    def set_period(self, period_from: str, period_to: str) -> IRBuilder:
         """Set statement date range (ISO 8601 YYYY-MM-DD)."""
         self._period_from = period_from
         self._period_to = period_to
@@ -167,7 +169,7 @@ class IRBuilder:
         self._meta.period_to = period_to
         return self
 
-    def add_warning(self, message: str) -> "IRBuilder":
+    def add_warning(self, message: str) -> IRBuilder:
         """Append a parse warning."""
         self._warnings.append(message)
         return self
@@ -182,7 +184,7 @@ class IRBuilder:
         currency: str = "",
         unit_price: str = "",
         valuation: str = "",
-    ) -> "IRBuilder":
+    ) -> IRBuilder:
         """Append an investment/holding row."""
         self._investment_holdings.append(InvestmentHolding(
             name=name,
@@ -193,12 +195,12 @@ class IRBuilder:
         ))
         return self
 
-    def set_reconciliation(self, data: dict[str, Any]) -> "IRBuilder":
+    def set_reconciliation(self, data: dict[str, Any]) -> IRBuilder:
         """Set the reconciliation data dict."""
         self._reconciliation = dict(data)
         return self
 
-    def set_extras(self, data: dict[str, Any]) -> "IRBuilder":
+    def set_extras(self, data: dict[str, Any]) -> IRBuilder:
         """Set bank-specific supplementary data dict."""
         self._extras = dict(data)
         return self
@@ -212,7 +214,7 @@ class IRBuilder:
         minimum_due: str | None = None,
         previous_balance: str | None = None,
         total_amount_due: str | None = None,
-    ) -> "IRBuilder":
+    ) -> IRBuilder:
         """Set credit card statement summary fields (bank-agnostic)."""
         self._credit_card_summary = CreditCardSummary(
             payment_due_date=payment_due_date,
@@ -243,7 +245,7 @@ class IRBuilder:
         balance_after: float | None = None,
         extras: dict[str, Any] | None = None,
         _debug: DebugInfo | None = None,
-    ) -> "IRBuilder":
+    ) -> IRBuilder:
         """Append one transaction to the active account."""
         if self._active_account is None:
             _ = self.add_account(name="Account")
@@ -280,7 +282,7 @@ class IRBuilder:
         principal: float = 0.0,
         currency: str = "",
         assume_pct_rate: bool = False,
-    ) -> "IRBuilder":
+    ) -> IRBuilder:
         """Append one fixed-deposit record to the active account.
 
         Fixed deposits are NOT transactions. They are stored on
@@ -330,7 +332,7 @@ class IRBuilder:
 
         return self
 
-    def add_transaction_dict(self, row: dict[str, Any]) -> "IRBuilder":
+    def add_transaction_dict(self, row: dict[str, Any]) -> IRBuilder:
         """Convenience: add a transaction from a raw parser dict.
 
         Keys recognised (all optional, missing keys get defaults):
