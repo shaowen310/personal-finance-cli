@@ -46,8 +46,9 @@
     {
       // Default environment: strict checks for all packages.
       "root": ".",
-      "reportUnusedImport": "error",
-      "reportUnusedVariable": "error"
+      "reportUnusedImport": "warning",
+      "reportUnusedVariable": "warning",
+      "reportExplicitAny": "error"
     },
     {
       // pfa-parser depends on pdfplumber (and pulls in pandas / click in

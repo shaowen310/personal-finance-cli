@@ -9,12 +9,20 @@ All dataclasses provide ``to_dict()`` / ``from_dict()`` for JSON serialisation.
 
 import hashlib
 import json
-from dataclasses import dataclass, field, fields
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any
+from typing import cast
 
 from .account_type import AccountType
 from .common import parse_fd_rate
+
+
+# Arbitrary JSON value — used for free-form ``extras`` / reconciliation data and
+# the dict-based (de)serialisation helpers. Replaces ``Any`` so the package stays
+# free of explicit ``Any`` under ``reportExplicitAny``.
+type JSONValue = (
+    dict[str, "JSONValue"] | list["JSONValue"] | str | int | float | bool | None
+)
 
 
 # ---------------------------------------------------------------------------
@@ -145,7 +153,7 @@ class Transaction:
     balance_after: float | None = None
 
     # === Bank-specific columns (free-form, for non-standard transaction fields) ===
-    extras: dict[str, Any] | None = None
+    extras: dict[str, JSONValue] | None = None
 
     # === Debug ===
     _debug: DebugInfo | None = None
@@ -214,7 +222,7 @@ class Account:
 
     # Bank-specific data that does not fit the standard fields
     # (e.g. credit_line, FD rate, locked_amount, SRS contributions).
-    extras: dict[str, Any] | None = None
+    extras: dict[str, JSONValue] | None = None
 
     def __post_init__(self) -> None:
         self.account_type = AccountType.normalize(self.account_type).value
@@ -234,8 +242,8 @@ class ParsedStatement:
 
     # Phase 3 extension fields (all Optional, default=None, omitted from JSON when None)
     investment_holdings: list[InvestmentHolding] | None = None
-    reconciliation: dict[str, Any] | None = None
-    extras: dict[str, Any] | None = None
+    reconciliation: dict[str, JSONValue] | None = None
+    extras: dict[str, JSONValue] | None = None
     credit_card_summary: CreditCardSummary | None = None
 
     def to_json(self, *, indent: int = 2) -> str:
@@ -247,7 +255,7 @@ class ParsedStatement:
 # Serialisation helpers
 # ---------------------------------------------------------------------------
 
-def _dataclass_to_dict(obj: Any) -> Any:
+def _dataclass_to_dict(obj: object) -> JSONValue:
     """Recursively convert dataclass instance(s) to plain dicts.
 
     ``None`` values are omitted from output to keep JSON compact and
@@ -258,13 +266,13 @@ def _dataclass_to_dict(obj: Any) -> Any:
     if isinstance(obj, dict):
         return {k: _dataclass_to_dict(v) for k, v in obj.items()}
     if hasattr(obj, "__dataclass_fields__"):
-        result: dict[str, Any] = {}
-        for f in fields(obj):
-            val = getattr(obj, f.name)
-            if val is not None:
-                result[f.name] = _dataclass_to_dict(val)
+        result: dict[str, JSONValue] = {}
+        obj_dict: dict[str, object] = getattr(obj, "__dict__")
+        for k, v in obj_dict.items():
+            if v is not None:
+                result[k] = _dataclass_to_dict(v)
         return result
-    return obj
+    return cast(JSONValue, obj)
 
 
 def to_json(statement: ParsedStatement, *, indent: int = 2) -> str:
@@ -272,83 +280,99 @@ def to_json(statement: ParsedStatement, *, indent: int = 2) -> str:
     return json.dumps(_dataclass_to_dict(statement), indent=indent, ensure_ascii=False)
 
 
-def _transaction_from_dict(td: dict[str, Any]) -> Transaction:
+def _transaction_from_dict(td: dict[str, JSONValue]) -> Transaction:
     """Build a single ``Transaction`` from its dict representation."""
+    debug_data = cast("dict[str, JSONValue] | None", td.get("_debug"))
     return Transaction(
-        txn_id=td.get("txn_id", ""),
-        posted_date=td.get("posted_date", ""),
-        value_date=td.get("value_date"),
-        amount=td.get("amount", 0.0),
-        currency=td.get("currency", ""),
-        interest_amount=td.get("interest_amount"),
-        description=td.get("description", ""),
-        tags=td.get("tags", []),
-        link_labels=td.get("link_labels", []),
-        is_reversal=td.get("is_reversal", False),
-        is_internal_transfer=td.get("is_internal_transfer", False),
-        linked_txn_ids=td.get("linked_txn_ids") or [],
-        balance_after=td.get("balance_after"),
-        extras=td.get("extras"),
-        _debug=DebugInfo(**td["_debug"]) if td.get("_debug") else None,
+        txn_id=cast(str, td.get("txn_id", "")),
+        posted_date=cast(str, td.get("posted_date", "")),
+        value_date=cast("str | None", td.get("value_date")),
+        amount=cast(float, td.get("amount", 0.0)),
+        currency=cast(str, td.get("currency", "")),
+        interest_amount=cast("float | None", td.get("interest_amount")),
+        description=cast(str, td.get("description", "")),
+        tags=cast("list[str]", td.get("tags", [])),
+        link_labels=cast("list[str]", td.get("link_labels", [])),
+        is_reversal=cast(bool, td.get("is_reversal", False)),
+        is_internal_transfer=cast(bool, td.get("is_internal_transfer", False)),
+        linked_txn_ids=cast("list[str]", td.get("linked_txn_ids") or []),
+        balance_after=cast("float | None", td.get("balance_after")),
+        extras=cast("dict[str, JSONValue] | None", td.get("extras")),
+        _debug=(
+            DebugInfo(
+                raw_pdf_text=cast("str | None", debug_data.get("raw_pdf_text")),
+                classification_rules=cast("list[str]", debug_data.get("classification_rules", [])),
+            )
+            if debug_data else None
+        ),
     )
 
 
-def _account_from_dict(ad: dict[str, Any]) -> Account:
+def _account_from_dict(ad: dict[str, JSONValue]) -> Account:
     """Build a single ``Account`` (with nested transactions) from its dict."""
     return Account(
-        name=ad.get("name", ""),
-        account_no=ad.get("account_no", ""),
-        account_type=ad.get("account_type", "unknown"),
-        currency=ad.get("currency", ""),
-        account_holder=ad.get("account_holder"),
-        institution=ad.get("institution"),
-        opening_balance=ad.get("opening_balance"),
-        closing_balance=ad.get("closing_balance"),
-        transactions=[_transaction_from_dict(t) for t in ad.get("transactions", [])],
+        name=cast(str, ad.get("name", "")),
+        account_no=cast(str, ad.get("account_no", "")),
+        account_type=cast(str, ad.get("account_type", "unknown")),
+        currency=cast(str, ad.get("currency", "")),
+        account_holder=cast("str | None", ad.get("account_holder")),
+        institution=cast("str | None", ad.get("institution")),
+        opening_balance=cast("float | None", ad.get("opening_balance")),
+        closing_balance=cast("float | None", ad.get("closing_balance")),
+        transactions=cast(
+            "list[Transaction]",
+            [_transaction_from_dict(cast("dict[str, JSONValue]", t)) for t in cast("list[JSONValue]", ad.get("transactions", []))],
+        ),
         fd_records=(
-            [_fd_record_from_dict(r) for r in ad["fd_records"]]
+            cast(
+                "list[FixedDepositRecord]",
+                [_fd_record_from_dict(cast("dict[str, JSONValue]", r)) for r in cast("list[JSONValue]", ad["fd_records"])],
+            )
             if ad.get("fd_records") is not None else None
         ),
         investment_holdings=(
-            [_investment_holding_from_dict(r) for r in ad["investment_holdings"]]
+            cast(
+                "list[InvestmentHolding]",
+                [_investment_holding_from_dict(cast("dict[str, JSONValue]", r)) for r in cast("list[JSONValue]", ad["investment_holdings"])],
+            )
             if ad.get("investment_holdings") is not None else None
         ),
-        extras=ad.get("extras"),
+        extras=cast("dict[str, JSONValue] | None", ad.get("extras")),
     )
 
 
-def _fd_record_from_dict(rd: dict[str, Any]) -> FixedDepositRecord:
+def _fd_record_from_dict(rd: dict[str, JSONValue]) -> FixedDepositRecord:
     """Build a single ``FixedDepositRecord`` from its dict representation."""
-    raw = rd.get("raw_interest_rate")
-    rate = rd.get("interest_rate")
+    raw = cast("str | None", rd.get("raw_interest_rate"))
+    rate = cast("float | None", rd.get("interest_rate"))
     if rate is None and raw is not None:
         rate = parse_fd_rate(raw)
     return FixedDepositRecord(
-        deposit_no=rd.get("deposit_no", ""),
-        value_date=rd.get("value_date"),
-        maturity_date=rd.get("maturity_date"),
+        deposit_no=cast(str, rd.get("deposit_no", "")),
+        value_date=cast("str | None", rd.get("value_date")),
+        maturity_date=cast("str | None", rd.get("maturity_date")),
         interest_rate=rate,
         raw_interest_rate=raw,
-        interest_amount=rd.get("interest_amount"),
-        principal=rd.get("principal", 0.0),
-        currency=rd.get("currency", ""),
+        interest_amount=cast("float | None", rd.get("interest_amount")),
+        principal=cast(float, rd.get("principal", 0.0)),
+        currency=cast(str, rd.get("currency", "")),
     )
 
 
-def _investment_holding_from_dict(hd: dict[str, Any]) -> InvestmentHolding:
+def _investment_holding_from_dict(hd: dict[str, JSONValue]) -> InvestmentHolding:
     """Build a single ``InvestmentHolding`` from its dict representation."""
     return InvestmentHolding(
-        name=hd.get("name", ""),
-        units=hd.get("units", ""),
-        currency=hd.get("currency", ""),
-        unit_price=hd.get("unit_price", ""),
-        valuation=hd.get("valuation", ""),
-        cost=hd.get("cost", ""),
-        unrealised_pl=hd.get("unrealised_pl", ""),
+        name=cast(str, hd.get("name", "")),
+        units=cast(str, hd.get("units", "")),
+        currency=cast(str, hd.get("currency", "")),
+        unit_price=cast(str, hd.get("unit_price", "")),
+        valuation=cast(str, hd.get("valuation", "")),
+        cost=cast(str, hd.get("cost", "")),
+        unrealised_pl=cast(str, hd.get("unrealised_pl", "")),
     )
 
 
-def from_dict(data: dict[str, Any]) -> ParsedStatement:
+def from_dict(data: dict[str, JSONValue]) -> ParsedStatement:
     """Deserialize a dict (e.g. from JSON) back to a ParsedStatement.
 
     Requires the ``accounts`` field. IR produced by older parsers (before
@@ -363,29 +387,66 @@ def from_dict(data: dict[str, Any]) -> ParsedStatement:
             "longer supported. Please re-run extraction from the source PDF."
         )
 
-    parser_data = data.get("parser", {})
-    meta_data = data.get("statement_meta", {})
+    parser_data = cast("dict[str, JSONValue]", data.get("parser", {}))
+    meta_data = cast("dict[str, JSONValue]", data.get("statement_meta", {}))
 
-    accounts = [_account_from_dict(a) for a in data.get("accounts", [])]
+    accounts = cast(
+        "list[Account]",
+        [_account_from_dict(cast("dict[str, JSONValue]", a)) for a in cast("list[JSONValue]", data.get("accounts", []))],
+    )
+
+    credit_card_summary = cast("dict[str, JSONValue] | None", data.get("credit_card_summary"))
+    investment_holdings_raw = cast("list[JSONValue] | None", data.get("investment_holdings"))
 
     return ParsedStatement(
-        ir_version=data.get("ir_version", "2026.4"),
-        parsed_at=data.get("parsed_at", ""),
-        parser=ParserInfo(**parser_data) if parser_data else ParserInfo(name="", version=""),
-        source_file=data.get("source_file", ""),
-        statement_meta=StatementMeta(**meta_data) if meta_data else StatementMeta(),
+        ir_version=cast(str, data.get("ir_version", "2026.4")),
+        parsed_at=cast(str, data.get("parsed_at", "")),
+        parser=ParserInfo(
+            name=cast(str, parser_data.get("name", "")),
+            version=cast(str, parser_data.get("version", "")),
+        ),
+        source_file=cast(str, data.get("source_file", "")),
+        statement_meta=StatementMeta(
+            institution=cast(str, meta_data.get("institution") or ""),
+            account_holder=cast("str | None", meta_data.get("account_holder")),
+            period_from=cast("str | None", meta_data.get("period_from")),
+            period_to=cast("str | None", meta_data.get("period_to")),
+            functional_currency=cast(str, meta_data.get("functional_currency", "")),
+        ),
         accounts=accounts,
-        warnings=data.get("warnings", []),
+        warnings=cast("list[str]", data.get("warnings", [])),
         # Phase 3 extension fields (default to None when absent)
         investment_holdings=(
-            [InvestmentHolding(**r) for r in data["investment_holdings"]]
-            if data.get("investment_holdings") is not None else None
+            cast(
+                "list[InvestmentHolding]",
+                [
+                    InvestmentHolding(
+                        name=cast(str, rd.get("name", "")),
+                        units=cast(str, rd.get("units", "")),
+                        currency=cast(str, rd.get("currency", "")),
+                        unit_price=cast(str, rd.get("unit_price", "")),
+                        valuation=cast(str, rd.get("valuation", "")),
+                        cost=cast(str, rd.get("cost", "")),
+                        unrealised_pl=cast(str, rd.get("unrealised_pl", "")),
+                    )
+                    for r in cast("list[JSONValue]", data["investment_holdings"])
+                    for rd in (cast("dict[str, JSONValue]", r),)
+                ],
+            )
+            if investment_holdings_raw is not None else None
         ),
-        reconciliation=data.get("reconciliation"),
-        extras=data.get("extras"),
+        reconciliation=cast("dict[str, JSONValue] | None", data.get("reconciliation")),
+        extras=cast("dict[str, JSONValue] | None", data.get("extras")),
         credit_card_summary=(
-            CreditCardSummary(**data["credit_card_summary"])
-            if data.get("credit_card_summary") else None
+            CreditCardSummary(
+                payment_due_date=cast("str | None", credit_card_summary.get("payment_due_date")),
+                credit_limit=cast("str | None", credit_card_summary.get("credit_limit")),
+                available_credit=cast("str | None", credit_card_summary.get("available_credit")),
+                minimum_due=cast("str | None", credit_card_summary.get("minimum_due")),
+                previous_balance=cast("str | None", credit_card_summary.get("previous_balance")),
+                total_amount_due=cast("str | None", credit_card_summary.get("total_amount_due")),
+            )
+            if credit_card_summary else None
         ),
     )
 
