@@ -48,7 +48,7 @@ def _http_get_json(url: str) -> dict[str, object] | None:
     req = urllib.request.Request(
         url, headers={"User-Agent": "personal-finance-cli/1.0"}
     )
-    with urllib.request.urlopen(req, timeout=5) as resp:  # noqa: S310 - https only
+    with urllib.request.urlopen(req, timeout=5) as resp:  # https only
         text = resp.read().decode("utf-8")
     parsed: object = json.loads(text)
     return _as_dict(parsed) if isinstance(parsed, dict) else None
@@ -65,12 +65,11 @@ class FrankfurterProvider:
     def fetch(self, currencies: list[str], as_of: str | None = None) -> FXFetchResult | None:
         syms = [c for c in currencies if c and c.upper() != BASE_CCY]
         if not syms:
-            result: FXFetchResult = {
+            return {
                 "rates": {BASE_CCY: 1.0},
                 "date": as_of or "",
                 "source": self.base_url,
             }
-            return result
         symbols_csv = ",".join(syms)
         if as_of:
             url = f"{self.base_url}/{as_of}?from={BASE_CCY}&to={symbols_csv}"
