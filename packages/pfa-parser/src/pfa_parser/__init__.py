@@ -7,8 +7,9 @@ Usage:
 """
 
 from .base import BankStatementParser, Transaction
+from .cli import main
+from .convert_statement import detect_type
 from .sg_parser import SGBankPDFParser
-from .convert_statement import detect_type, main
 
 __all__ = [
     "BankStatementParser",

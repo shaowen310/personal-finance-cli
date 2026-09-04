@@ -29,12 +29,8 @@ import re
 import sys
 from pathlib import Path
 
-import pdfplumber
 from pdfplumber.pdf import PDF as PDFType
-
-from pfa_ir_schema import from_json as ir_from_json, ParsedStatement
-
-from .postprocess import postprocess_statement
+from pfa_ir_schema import ParsedStatement
 
 from .renderers.markdown import MD_RENDERER_REGISTRY
 
@@ -190,7 +186,7 @@ def detect_uob(pdf: PDFType) -> tuple[str, str] | None:
     for page in pdf.pages:
         full_text += "\n" + (page.extract_text() or "")
 
-    if re.search(r"[A-Za-z0-9._%+-]+@uobgroup\.com", full_text, re.I) is None:
+    if re.search(r"[A-Za-z0-9._%+-]+@uobgroup\.com", full_text, re.IGNORECASE) is None:
         return None
 
     # Transaction-style statement vs. portfolio summary.
@@ -248,89 +244,3 @@ def render_ir_to_md(ir: ParsedStatement, out_path: Path, *, do_mask: bool = True
     _ = out_path.write_text(md, encoding="utf-8")
     print(f"Wrote: {out_path}")
     return md
-
-
-# ----------------------------------------------------------------------------
-# Main entry — unified IR→MD pipeline
-# ----------------------------------------------------------------------------
-
-def main() -> None:
-    if len(sys.argv) < 2:
-        print("Usage: python convert_statement.py <input.pdf|input.ir.json> [output.md] [--no-mask] [--ir-only]")
-        sys.exit(1)
-
-    in_path = Path(sys.argv[1])
-    if not in_path.exists():
-        print(f"Input not found: {in_path}")
-        sys.exit(1)
-
-    out_path = Path(sys.argv[2]) if len(sys.argv) > 2 and not sys.argv[2].startswith("--") else in_path.with_suffix(".md")
-    do_mask = "--no-mask" not in sys.argv
-    ir_only = "--ir-only" in sys.argv
-
-    # ------------------------------------------------------------------
-    # Branch: IR JSON input → load & render directly
-    # ------------------------------------------------------------------
-    if in_path.suffix.lower() == ".json":
-        json_str = in_path.read_text(encoding="utf-8")
-        ir = ir_from_json(json_str)
-        ir = postprocess_statement(ir)
-        print(f"Loaded IR: {in_path}  ({sum(len(a.transactions) for a in ir.accounts)} txns, parser: {ir.parser.name})")
-        if ir_only:
-            return  # validate only, do nothing
-        _ = render_ir_to_md(ir, out_path, do_mask=do_mask)
-        return
-
-    # ------------------------------------------------------------------
-    # Branch: PDF input → detect → extract → write IR → render MD
-    # ------------------------------------------------------------------
-    with pdfplumber.open(str(in_path)) as pdf:
-        bank, family = detect_type(pdf)
-
-    if bank == "unknown":
-        print("Error: This bank statement type is not supported yet.")
-        print("The script could not identify the statement as DBS, UOB, ICBC, or OCBC.")
-        print("Please update the skill with detection rules for this statement format.")
-        sys.exit(1)
-
-    from .extractors.registry import get_extractor
-
-    ir_cls = get_extractor(bank, family)
-    renderer = get_renderer(bank, family)
-
-    if ir_cls is None or renderer is None:
-        print(f"Error: No extractor/renderer registered for ({bank}, {family})")
-        sys.exit(1)
-
-    extractor = ir_cls()
-    ir = extractor.to_ir(in_path)  # includes postprocessing
-
-    # Write IR JSON (unmasked raw data)
-    ir_path = out_path.with_suffix(".ir.json")
-    _ = ir_path.write_text(ir.to_json(), encoding="utf-8")
-    print(f"Wrote IR: {ir_path}  ({sum(len(a.transactions) for a in ir.accounts)} txns)")
-
-    # Render Markdown (masking applied at render time)
-    if not ir_only:
-        _ = render_ir_to_md(ir, out_path, do_mask=do_mask)
-
-    # Summary
-    # Human-readable label for the detected statement type, keyed by (bank, family)
-    # — the same key used by the extractor/renderer registries.
-    STATEMENT_LABELS: dict[tuple[str, str], str] = {
-        ("dbs", "consolidated"): "DBS consolidated statement",
-        ("icbc", "consolidated"): "ICBC bank account statement",
-        ("ocbc", "consolidated"): "OCBC consolidated statement",
-        ("ocbc", "card"): "OCBC credit card",
-        ("uob", "txn"): "UOB transaction-style",
-        ("uob", "one"): "UOB One multi-account",
-        ("uob", "portfolio"): "UOB portfolio summary",
-    }
-    label = STATEMENT_LABELS.get((bank, family), f"{bank}/{family}")
-
-    print(f"Statement type: {label}")
-    print(f"Records: {sum(len(a.transactions) for a in ir.accounts)}")
-
-
-if __name__ == "__main__":
-    main()
