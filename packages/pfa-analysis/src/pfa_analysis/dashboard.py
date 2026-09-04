@@ -18,10 +18,6 @@ from pfa_fx import fetch_fx_rates
 from pfa_analysis.analyze import (
     _NON_CASH_ACCOUNT_TYPES,
     UNCATEGORIZED,
-    AnalysisResult,
-    FxPair,
-    Meta,
-    TxnRow,
     _analyze_file,
     _classify_discretionary,
     _load_ir_with_txn_id,
@@ -32,6 +28,12 @@ from pfa_analysis.analyze import (
     parse_num,
 )
 from pfa_analysis.render_md import FxWrapper, convert_to_sgd
+from pfa_analysis.types import (
+    AnalysisResult,
+    FxPair,
+    Meta,
+    TxnRow,
+)
 
 # ---------------------------------------------------------------------------
 # Typed shapes for the assembled dashboard (no ``Any``)

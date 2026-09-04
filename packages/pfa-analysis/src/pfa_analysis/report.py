@@ -29,7 +29,8 @@ from pfa_analysis.analyze import (
 )
 from pfa_analysis.categorize import UNCATEGORIZED
 from pfa_analysis.dashboard import DashboardData, build_dashboard_json
-from pfa_analysis.render_md import CatSummaryEntry, render_report
+from pfa_analysis.render_md import render_report
+from pfa_analysis.types import CatSummaryEntry
 
 
 class DemoIrTxn(TypedDict):

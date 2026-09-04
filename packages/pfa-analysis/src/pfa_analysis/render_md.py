@@ -15,21 +15,21 @@ from __future__ import annotations
 import math
 from collections import defaultdict
 from datetime import datetime
-from typing import TYPE_CHECKING, TypedDict, cast
+from typing import cast
 
 from pfa_fx import BASE_CCY, FxWrapper
 from pfa_fx import convert_to_sgd as pfa_convert_to_sgd
 
-if TYPE_CHECKING:
-    from pfa_analysis.analyze import (
-        AnalysisResult,
-        DrilldownRow,
-        DrilldownTxn,
-        FxResult,
-        IncomeExpenseGroup,
-        Metrics,
-        TransferGroup,
-    )
+from pfa_analysis.types import (
+    AnalysisResult,
+    CatSummaryEntry,
+    DrilldownRow,
+    DrilldownTxn,
+    FxResult,
+    IncomeExpenseGroup,
+    Metrics,
+    TransferGroup,
+)
 
 # ---------------------------------------------------------------------------
 # Shared FX utilities (used by both renderer & analyze.py)
@@ -38,16 +38,7 @@ if TYPE_CHECKING:
 FX_BASE = BASE_CCY  # canonical base currency (SGD)
 
 
-# NOTE: ``class`` is a Python keyword, so the TypedDict is declared with the
-# functional syntax (a class-based ``class:`` field is a syntax error).
-CatSummaryEntry = TypedDict(
-    "CatSummaryEntry",
-    {
-        "class": str,
-        "category": str,
-        "count": int,
-    },
-)
+
 
 
 def convert_to_sgd(amount: float, currency: str, fx_rates: FxWrapper | None) -> float | None:

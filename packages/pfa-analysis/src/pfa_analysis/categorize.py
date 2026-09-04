@@ -16,12 +16,12 @@ import os
 import re
 import sys
 from collections import defaultdict
-from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import TypedDict
 
 from pfa_analysis.txn_ir import AccountDict, IrMeta, parse_ir
+from pfa_analysis.types import TxnRow
 
 # ---------------------------------------------------------------------------
 # Data model
@@ -36,22 +36,7 @@ EXPENSE_UNCATEGORIZED = f"Expense: {UNCATEGORIZED}"
 INCOME_UNCATEGORIZED = f"Income: {UNCATEGORIZED}"
 
 
-@dataclass
-class TxnRow:
-    """A single transaction row from the IR JSON export."""
 
-    txn_id: str
-    date: str  # "YYYY-MM-DD"
-    bank: str  # owning institution name
-    account: str  # raw account_no
-    account_type: str  # "current", "savings", "credit_card", "fixed_deposit", …
-    description: str
-    amount: float  # signed: + inflow, - outflow
-    balance_after: float | None
-    currency: str
-    category_hint: str | None = None  # from IR parser (e.g. "fixed_deposit")
-    tags: list[str] | None = None  # from IR parser (e.g. ["fd_principal"])
-    is_internal_transfer: bool = False  # from IR parser
 
 # ---------------------------------------------------------------------------
 # Rules-file / LLM payload types
@@ -178,7 +163,7 @@ def classify_by_rules(txn: TxnRow, rules: list[RuleDict]) -> str | None:
     Matching is case- and punctuation-insensitive.  First match wins.
     Returns the category name, or ``None`` if no rule matched.
     """
-    nd = _normalize_desc(txn.description)
+    nd = _normalize_desc(txn["description"])
     for rule in rules:
         category: str = rule["category"]
         keywords: list[str] = rule.get("match", [])
@@ -238,8 +223,8 @@ def build_institution_map(txns: list[TxnRow]) -> dict[str, str]:
     """
     imap: dict[str, str] = {}
     for txn in txns:
-        acct = txn.account.strip()
-        bank = txn.bank.strip()
+        acct = txn["account"].strip()
+        bank = txn.get("bank", "").strip()
         if acct and bank and acct not in imap:
             imap[acct] = bank
     return imap
@@ -270,62 +255,62 @@ def detect_interbank_transfers(
 
     # ---- Step 1: outgoing transfers ----------------------------------------
     for txn in txns:
-        if txn.amount >= 0:
+        if txn["amount"] >= 0:
             continue
 
-        src_inst = account_to_institution.get(txn.account, "")
-        desc_tokens = set(_ACCT_NO_RE.findall(txn.description))
+        src_inst = account_to_institution.get(txn["account"], "")
+        desc_tokens = set(_ACCT_NO_RE.findall(txn["description"]))
 
         for token in desc_tokens:
             dest_inst = account_to_institution.get(token, "")
             if dest_inst and dest_inst != src_inst:
-                result[txn.txn_id] = "Transfer: External"
+                result[txn["txn_id"]] = "Transfer: External"
                 outgoing_pool.append((txn, token))
                 break
 
     # ---- Step 2: incoming transfers (keyword-based) ------------------------
     for txn in txns:
-        if txn.txn_id in result:
+        if txn["txn_id"] in result:
             continue
-        if txn.amount <= 0:
+        if txn["amount"] <= 0:
             continue
 
-        nd = _normalize_desc(txn.description)
+        nd = _normalize_desc(txn["description"])
         has_transfer_kw = any(kw in nd for kw in _TRANSFER_KW)
 
         if not has_transfer_kw:
             continue
 
-        dest_inst = account_to_institution.get(txn.account, "")
-        desc_tokens = set(_ACCT_NO_RE.findall(txn.description))
+        dest_inst = account_to_institution.get(txn["account"], "")
+        desc_tokens = set(_ACCT_NO_RE.findall(txn["description"]))
 
         for token in desc_tokens:
             src_inst = account_to_institution.get(token, "")
             if src_inst and src_inst != dest_inst:
-                result[txn.txn_id] = "Transfer: External"
+                result[txn["txn_id"]] = "Transfer: External"
                 break
 
     # ---- Step 3: pair remaining deposits to known outgoing transfers -------
     for txn in txns:
-        if txn.txn_id in result:
+        if txn["txn_id"] in result:
             continue
-        if txn.amount <= 0:
+        if txn["amount"] <= 0:
             continue
 
-        txn_date = datetime.strptime(txn.date, "%Y-%m-%d")  # noqa: DTZ007 -- date-only arithmetic, tz irrelevant
+        txn_date = datetime.strptime(txn["date"], "%Y-%m-%d")  # noqa: DTZ007 -- date-only arithmetic, tz irrelevant
 
         for out_txn, dest_acct in outgoing_pool:
-            if dest_acct != txn.account:
+            if dest_acct != txn["account"]:
                 continue
-            out_date = datetime.strptime(out_txn.date, "%Y-%m-%d")  # noqa: DTZ007 -- date-only arithmetic, tz irrelevant
+            out_date = datetime.strptime(out_txn["date"], "%Y-%m-%d")  # noqa: DTZ007 -- date-only arithmetic, tz irrelevant
             delta = abs((txn_date - out_date).days)
 
             if (
                 delta <= 3
-                and out_txn.amount < 0
-                and abs(txn.amount - abs(out_txn.amount)) < 0.01
+                and out_txn["amount"] < 0
+                and abs(txn["amount"] - abs(out_txn["amount"])) < 0.01
             ):
-                result[txn.txn_id] = "Transfer: External"
+                result[txn["txn_id"]] = "Transfer: External"
                 break
 
     return result
@@ -383,14 +368,14 @@ def llm_classify(
     batch_items: list[LlmBatchItem] = []
     for txn in uncategorized:
         item: LlmBatchItem = {
-            "txn_id": txn.txn_id,
-            "description": txn.description,
-            "amount": txn.amount,
+            "txn_id": txn["txn_id"],
+            "description": txn["description"],
+            "amount": txn["amount"],
         }
         batch_items.append(item)
 
     categories_str = ", ".join(known_categories)
-    input_ids = {t.txn_id for t in uncategorized}
+    input_ids = {t["txn_id"] for t in uncategorized}
 
     prompt = (
         f"Classify each transaction into exactly one of these categories:\n"
@@ -474,7 +459,7 @@ def validate_coverage(txns: list[TxnRow], result: dict[str, str]) -> list[str]:
 
     Returns a list of issue strings (empty = full coverage).
     """
-    input_ids = {t.txn_id for t in txns}
+    input_ids = {t["txn_id"] for t in txns}
     output_ids = set(result.keys())
 
     missing = input_ids - output_ids
@@ -533,16 +518,16 @@ def print_summary(txns: list[TxnRow], result: dict[str, str], *, default_categor
 
     n_external = transfer_cats.get("Transfer: External", 0)
     if n_external:
-        txn_map = {t.txn_id: t for t in txns}
+        txn_map = {t["txn_id"]: t for t in txns}
         out_total = sum(
-            abs(txn_map[tid].amount)
+            abs(txn_map[tid]["amount"])
             for tid, cat in result.items()
-            if cat == "Transfer: External" and tid in txn_map and txn_map[tid].amount < 0
+            if cat == "Transfer: External" and tid in txn_map and txn_map[tid]["amount"] < 0
         )
         in_total = sum(
-            txn_map[tid].amount
+            txn_map[tid]["amount"]
             for tid, cat in result.items()
-            if cat == "Transfer: External" and tid in txn_map and txn_map[tid].amount > 0
+            if cat == "Transfer: External" and tid in txn_map and txn_map[tid]["amount"] > 0
         )
         print(f"\nExternal transfers: {n_external}")
         if out_total:
@@ -606,16 +591,16 @@ def categorize(
     # 4. Internal transfer pre-classification --------------------------------
     result: dict[str, str] = {}
     for txn in txns:
-        if txn.is_internal_transfer:
-            result[txn.txn_id] = "Transfer: Internal"
+        if txn["is_internal_transfer"]:
+            result[txn["txn_id"]] = "Transfer: Internal"
 
     # 5. Rule-based classification -------------------------------------------
     for txn in txns:
-        if txn.txn_id in result:
+        if txn["txn_id"] in result:
             continue
         cat = classify_by_rules(txn, rules)
         if cat:
-            result[txn.txn_id] = cat
+            result[txn["txn_id"]] = cat
 
     # 6. External transfer detection (overrides rule-based, not internal) ----
     transfer_cats = detect_interbank_transfers(txns, institution_map)
@@ -624,7 +609,7 @@ def categorize(
             result[tid] = cat
 
     # 7. LLM fallback --------------------------------------------------------
-    uncategorized = [t for t in txns if t.txn_id not in result]
+    uncategorized = [t for t in txns if t["txn_id"] not in result]
     if use_llm and uncategorized:
         print(
             f"\n{len(uncategorized)} transaction(s) uncategorized after rules.  "
@@ -638,7 +623,7 @@ def categorize(
             base_url=base_url,
         )
         result.update(llm_results)
-        still_un = len([t for t in txns if t.txn_id not in result])
+        still_un = len([t for t in txns if t["txn_id"] not in result])
         print(
             f"  LLM categorized {len(llm_results)} more; "
             + f"{still_un} still uncategorized."
@@ -646,26 +631,28 @@ def categorize(
 
     # 8. Fill remaining — income/expense-aware fallback -----------------------
     for txn in txns:
-        if txn.txn_id not in result:
+        if txn["txn_id"] not in result:
             # Try category_hint as a last-resort classification
-            mapped = _HINT_CATEGORY_MAP.get(txn.category_hint) if txn.category_hint else None
+            hint = txn.get("category_hint")
+            mapped = _HINT_CATEGORY_MAP.get(hint) if hint else None
             # Also check classification tags for hint matches
-            if not mapped and txn.tags:
-                for tag in txn.tags:
+            tags = txn.get("tags", [])
+            if not mapped and tags:
+                for tag in tags:
                     mapped = _HINT_CATEGORY_MAP.get(tag)
                     if mapped:
                         break
             if mapped and mapped in known_categories:
-                result[txn.txn_id] = mapped
+                result[txn["txn_id"]] = mapped
                 continue
 
             # Determine income vs expense from amount sign and account type.
-            at = txn.account_type.lower()
-            is_debit = (txn.amount > 0) if at in _CREDIT_LIKE else (txn.amount < 0)
+            at = txn["account_type"].lower()
+            is_debit = (txn["amount"] > 0) if at in _CREDIT_LIKE else (txn["amount"] < 0)
             if is_debit:
-                result[txn.txn_id] = EXPENSE_UNCATEGORIZED
+                result[txn["txn_id"]] = EXPENSE_UNCATEGORIZED
             else:
-                result[txn.txn_id] = INCOME_UNCATEGORIZED
+                result[txn["txn_id"]] = INCOME_UNCATEGORIZED
 
     return result
 
