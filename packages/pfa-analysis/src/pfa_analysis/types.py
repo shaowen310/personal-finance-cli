@@ -248,13 +248,12 @@ class AnalysisResult(TypedDict):
 # ---------------------------------------------------------------------------
 
 
-# NOTE: ``class`` is a Python keyword, so the TypedDict is declared with the
-# functional syntax (a class-based ``class:`` field is a syntax error).
-CatSummaryEntry = TypedDict(
-    "CatSummaryEntry",
-    {
-        "class": str,
-        "category": str,
-        "count": int,
-    },
-)
+class CatSummaryEntry(TypedDict):
+    """One row of the categorization summary table.
+
+    ``kind`` holds the high-level bucket: "Income", "Expense", or "Transfer".
+    """
+
+    kind: str
+    category: str
+    count: int

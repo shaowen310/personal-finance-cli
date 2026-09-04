@@ -207,19 +207,19 @@ def render_consolidated_report(
         total_classifiable += cnt
         if entry.get("source", "") != UNCATEGORIZED:
             total_categorized += cnt
-        cat_summary.append({"class": "Income", "category": entry.get("source", ""), "count": cnt})
+        cat_summary.append({"kind": "Income", "category": entry.get("source", ""), "count": cnt})
     for entry in expense_drill:
         cnt = len(entry.get("transactions", []))
         total_classifiable += cnt
         if entry.get("category", "") != UNCATEGORIZED:
             total_categorized += cnt
-        cat_summary.append({"class": "Expense", "category": entry.get("category", ""), "count": cnt})
+        cat_summary.append({"kind": "Expense", "category": entry.get("category", ""), "count": cnt})
     for entry in transfer_drill:
         cnt = len(entry.get("transactions", []))
         total_classifiable += cnt
         if entry["category"] != UNCATEGORIZED:
             total_categorized += cnt
-        cat_summary.append({"class": "Transfer", "category": entry["category"], "count": cnt})
+        cat_summary.append({"kind": "Transfer", "category": entry["category"], "count": cnt})
     # Coverage = transactions that got a real (non-Uncategorized) category among
     # all transactions requiring one (the income/expense/transfer drilldowns).
     # Internal transfers and currency conversions are excluded by design and do

@@ -310,7 +310,7 @@ def render_report(result: AnalysisResult, consolidated: bool = False,
         out.append("| Class | Category | Count |")
         out.append("|---|---:|---:|")
         for entry in cat_summary:
-            cls_disp = entry["class"] or "\u2014"
+            cls_disp = entry["kind"] or "\u2014"
             out.append(f"| {cls_disp} | {entry['category']} | {entry['count']} |")
         total_cnt = sum(e["count"] for e in cat_summary)
         out.append(f"| **Total** | | **{total_cnt}** |")
