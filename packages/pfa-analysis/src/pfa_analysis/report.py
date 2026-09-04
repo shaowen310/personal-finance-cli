@@ -16,7 +16,7 @@ import json
 import sys
 import tempfile
 from pathlib import Path
-from typing import Any, cast
+from typing import TypedDict, cast
 
 from pfa_fx import fetch_fx_rates
 
@@ -32,7 +32,45 @@ from pfa_analysis.dashboard import DashboardData, build_dashboard_json
 from pfa_analysis.render_md import CatSummaryEntry, render_report
 
 
-def demo_ir() -> dict[str, Any]:
+class DemoIrTxn(TypedDict):
+    """One synthetic transaction row in the demo consolidated IR."""
+
+    txn_id: str
+    posted_date: str
+    amount: float
+    currency: str
+    description: str
+    tags: list[str]
+    link_labels: list[str]
+    is_reversal: bool
+    is_internal_transfer: bool
+    linked_txn_ids: list[str]
+    balance_after: float
+
+
+class DemoIrAccount(TypedDict):
+    """One synthetic account in the demo consolidated IR."""
+
+    name: str
+    account_no: str
+    account_type: str
+    currency: str
+    opening_balance: float
+    closing_balance: float
+    transactions: list[DemoIrTxn]
+
+
+class DemoIr(TypedDict):
+    """Synthetic consolidated IR JSON (``accounts[]`` shape) for ``--demo``."""
+
+    ir_version: str
+    parser: dict[str, str]
+    source_file: str
+    statement_meta: dict[str, str]
+    accounts: list[DemoIrAccount]
+
+
+def demo_ir() -> DemoIr:
     """Synthetic consolidated IR (``accounts[]`` shape) used by ``--demo``.
 
     Mirrors the real parser/consolidator output so the demo exercises the same
@@ -51,7 +89,7 @@ def demo_ir() -> dict[str, Any]:
         ("2026-05-22", "TRANSFER FROM UOB", 300.00),
     ]
     balance = opening
-    txns: list[dict[str, Any]] = []
+    txns: list[DemoIrTxn] = []
     for i, (d, desc, amt) in enumerate(rows):
         balance += amt
         txns.append({
@@ -166,15 +204,15 @@ def render_consolidated_report(
     for entry in income_drill:
         cnt = len(entry.get("transactions", []))
         total_classifiable += cnt
-        if entry["source"] != UNCATEGORIZED:
+        if entry.get("source", "") != UNCATEGORIZED:
             total_categorized += cnt
-        cat_summary.append({"class": "Income", "category": entry["source"], "count": cnt})
+        cat_summary.append({"class": "Income", "category": entry.get("source", ""), "count": cnt})
     for entry in expense_drill:
         cnt = len(entry.get("transactions", []))
         total_classifiable += cnt
-        if entry["category"] != UNCATEGORIZED:
+        if entry.get("category", "") != UNCATEGORIZED:
             total_categorized += cnt
-        cat_summary.append({"class": "Expense", "category": entry["category"], "count": cnt})
+        cat_summary.append({"class": "Expense", "category": entry.get("category", ""), "count": cnt})
     for entry in transfer_drill:
         cnt = len(entry.get("transactions", []))
         total_classifiable += cnt
