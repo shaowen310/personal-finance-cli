@@ -1,22 +1,19 @@
-"""CLI + consolidated report rendering.
+"""Consolidated report rendering.
 
 Extracted from ``analyze.py`` as part of a structural split. Contains:
   * ``demo_ir``  — synthetic consolidated IR for ``--demo`` runs
   * ``render_consolidated_report`` — the canonical Markdown-report builder
-  * ``main`` — the ``argparse`` CLI entry point
 
 All analysis helpers it depends on are imported from ``analyze``; no behaviour
-or signatures were changed.
+or signatures were changed. The CLI entry point lives in ``pfa_analysis.cli``.
 """
 
 from __future__ import annotations
 
-import argparse
 import json
 import sys
-import tempfile
 from pathlib import Path
-from typing import TypedDict, cast
+from typing import TypedDict
 
 from pfa_fx import fetch_fx_rates
 
@@ -28,7 +25,6 @@ from pfa_analysis.analyze import (
     parse_date_to_iso,
 )
 from pfa_analysis.categorize import UNCATEGORIZED
-from pfa_analysis.dashboard import DashboardData, build_dashboard_json
 from pfa_analysis.render_md import render_report
 from pfa_analysis.types import CatSummaryEntry
 
@@ -240,69 +236,3 @@ def render_consolidated_report(
         warnings=result.get("warnings"),
     )
 
-
-def main(argv: list[str] | None = None) -> int:
-    p = argparse.ArgumentParser(description="Analyse personal balance sheet & cash flow from bank-statement JSON.")
-    _ = p.add_argument("input", nargs="?", help="Input IR JSON file (single statement or consolidated)")
-    _ = p.add_argument("output", nargs="?", help="Output dir (default: alongside input)")
-    _ = p.add_argument("--demo", action="store_true", help="Run with embedded synthetic data")
-    _ = p.add_argument("--dashboard-json", action="store_true",
-                       help="Output dashboard_data.json instead of Markdown")
-    _ = p.add_argument("--categories", help="Path to categories.json from txn-categorize")
-    _ = p.add_argument("--cost-basis", help="Path to cost_basis.json for unrealized P&L (for --dashboard-json)")
-    _ = p.add_argument("--start-date", metavar="YYYY-MM-DD",
-                       help="Only include transactions on or after this date (inclusive)")
-    _ = p.add_argument("--end-date", metavar="YYYY-MM-DD",
-                       help="Only include transactions on or before this date (inclusive)")
-    args = p.parse_args(argv)
-
-    if args.demo:
-        ir = demo_ir()
-        tmp = Path(tempfile.gettempdir()) / "demo_statements.ir.json"
-        _ = tmp.write_text(json.dumps(ir, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-        text = render_consolidated_report(tmp)
-        out_path = Path("demo_Finance_Report.md")
-        _ = out_path.write_text(text, encoding="utf-8")
-        print(f"[DEMO] wrote {out_path}")
-        return 0
-
-    if not args.input:
-        p.error("provide <input.json> or --demo")
-
-    in_path = Path(args.input)
-    out_dir = Path(args.output) if args.output else in_path.parent
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    # Dashboard JSON mode: produce dashboard_data.json from this single IR file.
-    if args.dashboard_json:
-        cat_path = Path(args.categories) if args.categories else None
-        cb_path = Path(args.cost_basis) if args.cost_basis else None
-        dashboard = cast(DashboardData, build_dashboard_json([in_path], cat_path, cb_path))
-        out_path = out_dir / "dashboard_data.json"
-        _ = out_path.write_text(
-            json.dumps(dashboard, indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8",
-        )
-        print(f"Written dashboard data: {out_path}")
-        print(f"  period: {dashboard.get('period', {})}")
-        print(f"  total_sgd_equivalent: {dashboard.get('asset_composition', {}).get('total_sgd_equivalent', {})}")
-        cats_loaded = "yes" if cat_path and cat_path.exists() else "no"
-        cost_loaded = "yes" if cb_path and cb_path.exists() else "no"
-        print(f"  categories: {cats_loaded}  cost_basis: {cost_loaded}")
-        return 0
-
-    # Standard Markdown mode (single file, which may be a consolidated IR).
-    text = render_consolidated_report(
-        in_path,
-        categories_path=args.categories,
-        start_date=args.start_date,
-        end_date=args.end_date,
-    )
-    out_path = out_dir / (in_path.stem + "_Finance_Report.md")
-    _ = out_path.write_text(text, encoding="utf-8")
-    print(f"Written: {out_path}")
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

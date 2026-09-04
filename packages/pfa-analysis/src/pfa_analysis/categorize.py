@@ -4,13 +4,12 @@ Classifies transactions using rule-first matching (from a YAML rules file)
 with optional LLM fallback for uncategorized items.  Detects external
 transfers to prevent double-counting as spend or income.
 
-CLI:
-    python categorize.py consolidated.ir.json -o categories.json \\
+CLI (via the package entry point):
+    python -m pfa_analysis categorize consolidated.ir.json -o categories.json \\
         [--rules rules.yaml] [--llm] [--model gpt-4o-mini]
 """
 from __future__ import annotations
 
-import argparse
 import json
 import os
 import re
@@ -658,118 +657,4 @@ def categorize(
 
 
 # ---------------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------------
 
-
-def main(argv: list[str] | None = None) -> int:
-    p = argparse.ArgumentParser(
-        description=(
-            "Categorize transactions from a bank-ir-consolidate "
-            + "IR JSON export."
-        ),
-    )
-    _ = p.add_argument(
-        "input",
-        help="Input IR JSON file (from bank-ir-consolidate export).",
-    )
-    _ = p.add_argument(
-        "-o",
-        "--output",
-        required=True,
-        help="Output categories.json file.",
-    )
-    _ = p.add_argument(
-        "--rules",
-        help=(
-            "Path to rules YAML file "
-            + "(default: references/categories.yaml alongside this script)."
-        ),
-    )
-    _ = p.add_argument(
-        "--llm",
-        action="store_true",
-        help=(
-            "Use LLM (OpenAI-compatible API) to classify transactions "
-            + "that rules could not categorize."
-        ),
-    )
-    _ = p.add_argument(
-        "--model",
-        default="gpt-4o-mini",
-        help="LLM model name (default: gpt-4o-mini).",
-    )
-    _ = p.add_argument(
-        "--api-key",
-        help="OpenAI API key (default: $OPENAI_API_KEY).",
-    )
-    _ = p.add_argument(
-        "--base-url",
-        help=(
-            "OpenAI-compatible API base URL "
-            + "(default: $OPENAI_BASE_URL or https://api.openai.com/v1)."
-        ),
-    )
-
-    args = p.parse_args(argv)
-
-    # ---- resolve paths -----------------------------------------------------
-    input_path = Path(args.input)
-    if not input_path.exists():
-        print(f"ERROR: Input file not found: {input_path}", file=sys.stderr)
-        return 1
-
-    rules_path = (
-        Path(args.rules) if args.rules else DEFAULT_RULES_PATH
-    )
-    if not rules_path.exists():
-        print(f"ERROR: Rules file not found: {rules_path}", file=sys.stderr)
-        return 1
-
-    # ---- run pipeline ------------------------------------------------------
-    try:
-        txns, _, _ = parse_input(input_path)
-    except Exception as exc:  # noqa: BLE001 -- report the parse failure and exit non-zero
-        print(f"ERROR parsing input: {exc}", file=sys.stderr)
-        return 1
-
-    try:
-        result = categorize(
-            input_path=input_path,
-            rules_path=rules_path,
-            use_llm=args.llm,
-            model=args.model,
-            api_key=args.api_key,
-            base_url=args.base_url,
-        )
-    except Exception as exc:  # noqa: BLE001 -- report the categorization failure and exit non-zero
-        print(f"ERROR during categorization: {exc}", file=sys.stderr)
-        return 1
-
-    # ---- validate ----------------------------------------------------------
-    coverage_issues = validate_coverage(txns, result)
-
-    # ---- write output ------------------------------------------------------
-    output_path = Path(args.output)
-    write_categories(result, output_path)
-    print(f"Written: {output_path.resolve()}")
-
-    # ---- print summary -----------------------------------------------------
-    print_summary(txns, result)
-
-    # ---- print validation issues -------------------------------------------
-    if coverage_issues:
-        print("COVERAGE ISSUES:")
-        for issue in coverage_issues:
-            print(f"  - {issue}")
-        print()
-
-    # Exit non-zero on coverage failure
-    if coverage_issues:
-        return 1
-
-    return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())
