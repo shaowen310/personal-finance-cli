@@ -13,9 +13,9 @@ from .link_transfers import (
 __all__ = [
     "consolidate_statements",
     "embed_fx_rates",
+    "link_cc_payments",
+    "link_currency_conversions",
     "link_inter_bank_transfers",
     "link_intra_bank_transfers",
-    "link_currency_conversions",
-    "link_cc_payments",
     "link_investment_transfers",
 ]

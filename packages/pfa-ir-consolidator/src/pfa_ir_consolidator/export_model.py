@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""export_model.py — serialize a consolidated ParsedStatement to RenderModel JSON.
+"""export_model.py — serialize a consolidated ParsedStatement to TxnTableModel JSON.
 
 Produces the interchange artifact consumed by the standalone
-transaction-categorization project: the JSON form of ``RenderModel.to_dict()``
-(see ``render_model.py``).
+transaction-categorization project: the JSON form of ``TxnTableModel.to_dict()``
+(see ``txn_table_model.py``).
 
 The export carries only the fields the categorizer needs — no account-holder PII:
 
@@ -26,7 +26,7 @@ The ``account`` field keeps the raw ``account_no`` on purpose — the categorize
 uses it to detect inter-bank transfers.
 
 Usage:
-    python export_model.py consolidated.ir.json -o export.render-model.json
+    python export_model.py consolidated.ir.json -o export.txn-table-model.json
     python export_model.py consolidated.ir.json --parser-dir ../sg-bank-pdf-parser
 """
 from __future__ import annotations
@@ -39,19 +39,23 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 
-import pfa_ir_schema  # noqa: E402
-from pfa_ir_consolidator.render_model import build_render_model  # noqa: E402
-from pfa_ir_consolidator.render_model_io import embedded_fx_rates, save_render_model  # noqa: E402
+import pfa_ir_schema
+
+from pfa_ir_consolidator.txn_table_model import build_txn_table_model
+from pfa_ir_consolidator.txn_table_model_io import (
+    embedded_fx_rates,
+    save_txn_table_model,
+)
 
 
 def main() -> None:
     ap = argparse.ArgumentParser(
-        description="Export a consolidated ParsedStatement to RenderModel JSON."
+        description="Export a consolidated ParsedStatement to TxnTableModel JSON."
     )
     _ = ap.add_argument("input", help="Consolidated *.ir.json to export")
     _ = ap.add_argument(
         "-o", "--output", required=True,
-        help="Path to write the RenderModel JSON export",
+        help="Path to write the TxnTableModel JSON export",
     )
     _ = ap.add_argument(
         "--parser-dir", default=None,
@@ -67,17 +71,17 @@ def main() -> None:
         sys.exit(f"[error] {args.input}: {e}")
 
     # Reuse FX already embedded in the consolidated IR (offline-safe); otherwise
-    # build_render_model falls back to its own internal resolution.
+    # build_txn_table_model falls back to its own internal resolution.
     fx_rates = embedded_fx_rates(ir)
-    model = build_render_model(ir, fx_rates=fx_rates)
-    save_render_model(model.to_dict(), Path(args.output), indent=args.indent)
+    model = build_txn_table_model(ir, fx_rates=fx_rates)
+    save_txn_table_model(model.to_dict(), Path(args.output), indent=args.indent)
 
     n_txns = sum(
         len(tbl.rows)
         for tables in model.txn_tables_by_type.values()
         for tbl in tables
     )
-    print(f"Wrote RenderModel export -> {args.output}")
+    print(f"Wrote TxnTableModel export -> {args.output}")
     print(
         f"  ir_version={model.ir_version} institutions={model.institutions} "+
         f"accounts={len(model.accounts)} txns={n_txns}"

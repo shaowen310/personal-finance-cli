@@ -14,20 +14,20 @@ This script merges those categories back into the consolidated ``ParsedStatement
    "transfer"), also flag ``txn.is_internal_transfer = True`` and ensure the ``"transfer"``
    tag is present, so downstream rendering / netting agrees with the categorizer.
 3. Validate coverage. The export that the categorizer consumed only contains the
-   transactions that ``build_render_model`` surfaces (FD legs / reversals are
+   transactions that ``build_txn_table_model`` surfaces (FD legs / reversals are
    intentionally skipped), so coverage is measured against that export — *not*
    against every transaction in the raw IR. Provide the export via
-   ``--render-model`` to enforce 1:1 coverage (every exported txn_id categorized
+   ``--txn-table-model`` to enforce 1:1 coverage (every exported txn_id categorized
    exactly once, no stray ids). Unknown ids (in categories but absent from the IR)
    always error.
-4. Write ``merged.ir.json`` and a ``merged.render-model.json`` (with the category
+4. Write ``merged.ir.json`` and a ``merged.txn-table-model.json`` (with the category
    injected into each ``TxnRow``) for the next pipeline stage.
 
 Usage:
     python merge_categories.py consolidated.ir.json categories.json -o merged.ir.json
     python merge_categories.py consolidated.ir.json categories.json \
-        --render-model export.render-model.json \
-        --merged-ir merged.ir.json --merged-model merged.render-model.json
+        --txn-table-model export.txn-table-model.json \
+        --merged-ir merged.ir.json --merged-model merged.txn-table-model.json
 """
 from __future__ import annotations
 
@@ -47,18 +47,18 @@ import pfa_ir_schema
 # package __init__; import it directly for the model-dict annotations below.
 from pfa_ir_schema.ir_schema import JSONValue
 
-from pfa_ir_consolidator.render_model import build_render_model
-from pfa_ir_consolidator.render_model_io import (
+from pfa_ir_consolidator.txn_table_model import build_txn_table_model
+from pfa_ir_consolidator.txn_table_model_io import (
     embedded_fx_rates,
-    load_render_model,
-    save_render_model,
+    load_txn_table_model,
+    save_txn_table_model,
 )
 
 
 def _iter_model_rows(model: dict[str, JSONValue]) -> Iterator[dict[str, JSONValue]]:
     """Yield every row dict under ``model["txn_tables_by_type"][*]["rows"]``.
 
-    The RenderModel interchange is plain JSON, so each level is narrowed with
+    The TxnTableModel interchange is plain JSON, so each level is narrowed with
     ``isinstance`` before descending; malformed levels are skipped.
     """
     tables_by_type = model.get("txn_tables_by_type")
@@ -128,19 +128,19 @@ def main() -> None:
         help="Output merged IR JSON path",
     )
     _ = ap.add_argument(
-        "--merged-model", default="merged.render-model.json",
-        help="Output merged RenderModel JSON path",
+        "--merged-model", default="merged.txn-table-model.json",
+        help="Output merged TxnTableModel JSON path",
     )
     _ = ap.add_argument("--parser-dir", default=None)
     _ = ap.add_argument("--indent", type=int, default=2)
     _ = ap.add_argument(
-        "--render-model", default=None,
-        help="The RenderModel export the categorizer consumed; when given, "+
+        "--txn-table-model", default=None,
+        help="The TxnTableModel export the categorizer consumed; when given, "+
              "enforces 1:1 coverage against its txn_ids",
     )
     _ = ap.add_argument(
         "--allow-uncategorized", action="store_true",
-        help="With --render-model, do not fail when some exported txns are "+
+        help="With --txn-table-model, do not fail when some exported txns are "+
              "left uncategorized",
     )
     args = ap.parse_args()
@@ -172,8 +172,8 @@ def main() -> None:
                 transfer_flagged += 1
 
     export_ids = (
-        _export_txn_ids(load_render_model(args.render_model))
-        if args.render_model
+        _export_txn_ids(load_txn_table_model(args.txn_table_model))
+        if args.txn_table_model
         else None
     )
 
@@ -208,12 +208,12 @@ def main() -> None:
     _ = out_ir.write_text(ir.to_json(indent=args.indent), encoding="utf-8")
 
     fx_rates = embedded_fx_rates(ir)
-    model = build_render_model(ir, fx_rates=fx_rates).to_dict()
+    model = build_txn_table_model(ir, fx_rates=fx_rates).to_dict()
     _inject_into_model(model, cat_map)
-    save_render_model(model, Path(args.merged_model), indent=args.indent)
+    save_txn_table_model(model, Path(args.merged_model), indent=args.indent)
 
     print(f"Merged categories -> {out_ir}")
-    print(f"Wrote merged RenderModel -> {args.merged_model}")
+    print(f"Wrote merged TxnTableModel -> {args.merged_model}")
     uncovered = (len(export_ids) if export_ids is not None else total) - matched
     print(
         f"  ir_txns={total} categorized={matched} "+

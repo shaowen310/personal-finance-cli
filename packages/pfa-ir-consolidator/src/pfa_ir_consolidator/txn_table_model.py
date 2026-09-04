@@ -1,16 +1,19 @@
-"""render_model.py — flatten a ParsedStatement into a render-oriented model.
+"""txn_table_model.py — flatten a ParsedStatement into the categorizer interchange.
 
 Keeps ``consolidated.ir.json`` as the authoritative ``ParsedStatement`` (no data
-duplication) while giving the markdown renderer a clean, render-ready structure.
+duplication) while projecting it into the de-identified ``TxnTableModel``
+structure: ``export_model.py`` serializes it for the transaction-categorization
+stage (consumed by ``pfa-analysis``) and ``merge_categories.py`` merges the
+categorizer output back through it.
 
 Masking is intentionally NOT applied here — descriptions/account numbers stay
-raw so the data remains unmasked; masking happens at render time.
+raw so the categorizer can match inter-bank transfers by destination account
+number; masking happens only at report-rendering time (``pfa-analysis``).
 
 FX rates (``DEFAULT_FX_RATES``, sourced from the ``pfa-fx`` package) are
 **not embedded in the statement data**; they are sourced externally (e.g.
-ValutaFX historical mid-market rates) and used to estimate SGD-equivalent
-values for non-SGD accounts in the Net Position section. Override by passing a
-custom ``fx_rates`` dict on construction.
+historical mid-market rates) and used to estimate SGD-equivalent values.
+Override by passing a custom ``fx_rates`` dict on construction.
 """
 from __future__ import annotations
 
@@ -27,8 +30,8 @@ _NON_TXN_ACCOUNTS = ("fixed_deposit", "unit_trust")
 class TxnRow:
     date: str
     bank: str
-    account: str            # raw account_no (mask at render)
-    description: str        # raw description (mask at render)
+    account: str            # raw account_no (masking applied downstream)
+    description: str        # raw description (masking applied downstream)
     withdrawal: float | None
     deposit: float | None
     balance_after: float | None
@@ -74,7 +77,7 @@ class CurrencyTable:
 
 
 @dataclass
-class RenderModel:
+class TxnTableModel:
     ir_version: str
     sources: list[dict[str, Any]]
     institutions: list[str]
@@ -84,7 +87,7 @@ class RenderModel:
     per_ccy_balances: dict[str, float]
     fx_rates: dict[str, float]       # currency → SGD per 1 unit (SGD = 1.0)
     txn_tables_by_type: dict[str, list[CurrencyTable]]
-    accounts: list[Any]      # original accounts, for the per-bank drill-down
+    accounts: list[Any]      # original accounts, projected (PII-stripped) in to_dict()
     warnings: list[str]
 
     def to_dict(self) -> dict[str, Any]:
@@ -144,7 +147,7 @@ def _skip_in_consolidated_table(txn: Any) -> bool:
     return txn.amount < 0 and "PAYMENT BY INTERNET" in (txn.description or "").upper()
 
 
-def build_render_model(stmt: Any, fx_rates: dict[str, float] | None = None) -> RenderModel:
+def build_txn_table_model(stmt: Any, fx_rates: dict[str, float] | None = None) -> TxnTableModel:
     meta = stmt.statement_meta
     consolidation = (stmt.extras or {}).get("consolidation", {})
     sources = consolidation.get("sources", [])
@@ -205,10 +208,10 @@ def build_render_model(stmt: Any, fx_rates: dict[str, float] | None = None) -> R
     txn_tables_by_type: dict[str, list[CurrencyTable]] = {}
     for (atype, _ccy), ct in by_type_ccy.items():
         txn_tables_by_type.setdefault(atype, []).append(ct)
-    for atype in txn_tables_by_type:
-        txn_tables_by_type[atype].sort(key=lambda ct: ct.currency)
+    for tables in txn_tables_by_type.values():
+        tables.sort(key=lambda ct: ct.currency)
 
-    return RenderModel(
+    return TxnTableModel(
         ir_version=stmt.ir_version,
         sources=sources,
         institutions=institutions,

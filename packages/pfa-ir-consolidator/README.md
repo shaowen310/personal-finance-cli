@@ -24,8 +24,8 @@ The original `bank-ir-consolidate` skill has been absorbed into this package.
   rates (with cache + fallback), never crashes on network failure.
 - **Category merge** — fold categorizer output (`categories.json`, produced
   by `pfa-analysis`) back into the consolidated IR.
-- **Render model** — build/serialize the de-identified `RenderModel` JSON that
-  `pfa-analysis` categorization consumes.
+- **Txn-table model** — build/serialize the de-identified `TxnTableModel` JSON
+  that `pfa-analysis` categorization consumes.
 
 ## Supported inputs
 
@@ -94,12 +94,12 @@ out = to_json(consolidated)
 
 Helper entry points also available:
 
-- `export_model.export_render_model(ir, ...)` — serialize to the
-  `RenderModel` JSON consumed by `pfa-analysis` categorization (no account-holder PII).
+- `export_model` — CLI that serializes to the `TxnTableModel` JSON consumed by
+  `pfa-analysis` categorization (no account-holder PII).
 - `merge_categories.merge_categories(ir, categories_json, ...)` — fold
   categorizer output back into the consolidated IR.
-- `render_model.build_render_model(ir, ...)` — build the in-memory render
-  model.
+- `txn_table_model.build_txn_table_model(ir, ...)` — build the in-memory
+  txn-table model.
 
 ## Repo layout
 
@@ -113,9 +113,9 @@ pfa-ir-consolidator/
         ├── consolidate.py    # merge + dedup + provenance
         ├── link_transfers.py  # inter/intra-bank, currency conversion, CC payment linking
         ├── fx_rates.py       # back-compat shim → pfa-fx (live FX fetch + cache + fallback)
-        ├── render_model.py   # in-memory render model
-        ├── render_model_io.py
-        ├── export_model.py   # consolidated IR -> RenderModel JSON (for categorizer)
+        ├── txn_table_model.py   # in-memory txn-table model (categorizer interchange)
+        ├── txn_table_model_io.py
+        ├── export_model.py   # consolidated IR -> TxnTableModel JSON (for categorizer)
         └── merge_categories.py  # fold categorizer output back into IR
 ```
 
