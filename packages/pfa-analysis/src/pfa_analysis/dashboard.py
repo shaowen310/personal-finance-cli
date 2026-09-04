@@ -217,7 +217,7 @@ def build_dashboard_json(
     for r in all_results:
         m = r.get("_meta_raw", r.get("meta", {}))
         if m.get("period_start") and m.get("period_end"):
-            periods.append({"from": str(m["period_start"]), "to": str(m["period_end"])})
+            periods.append({"from": str(m.get("period_start", "")), "to": str(m.get("period_end", ""))})
     latest_period = periods[-1] if periods else {"from": "", "to": ""}
 
     # ---- FX rates -----------------------------------------------------------
