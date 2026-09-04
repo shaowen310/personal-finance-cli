@@ -19,9 +19,9 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import TypedDict
 
-from pfa_analysis.txn_ir import parse_ir
+from pfa_analysis.txn_ir import AccountDict, IrMeta, parse_ir
 
 # ---------------------------------------------------------------------------
 # Data model
@@ -53,6 +53,33 @@ class TxnRow:
     tags: list[str] | None = None  # from IR parser (e.g. ["fd_principal"])
     is_internal_transfer: bool = False  # from IR parser
 
+# ---------------------------------------------------------------------------
+# Rules-file / LLM payload types
+# ---------------------------------------------------------------------------
+
+
+class RuleDict(TypedDict):
+    """One categorization rule: a target ``category`` plus ``match`` keywords."""
+
+    category: str
+    match: list[str]
+
+
+class CategoriesConfig(TypedDict):
+    """Parsed structure of a categories.yaml rules file."""
+
+    categories: list[str]
+    rules: list[RuleDict]
+
+
+class LlmBatchItem(TypedDict):
+    """A single transaction serialized for the LLM classification prompt."""
+
+    txn_id: str
+    description: str
+    amount: float
+
+
 # Account types where positive amounts represent debits (outflows).
 _CREDIT_LIKE: frozenset[str] = frozenset({"credit_card", "credit", "card"})
 
@@ -62,7 +89,7 @@ _CREDIT_LIKE: frozenset[str] = frozenset({"credit_card", "credit", "card"})
 # ---------------------------------------------------------------------------
 
 
-def parse_input(path: Path) -> tuple[list[TxnRow], list[dict[str, Any]], dict[str, Any]]:
+def parse_input(path: Path) -> tuple[list[TxnRow], list[AccountDict], IrMeta]:
     """Parse a bank-ir-consolidate IR JSON export.
 
     Returns ``(txns, accounts_raw, meta)`` where **txns** is a flat list of
@@ -108,7 +135,7 @@ DEFAULT_RULES_PATH = (
 )
 
 
-def load_rules(path: Path) -> dict[str, Any]:
+def load_rules(path: Path) -> CategoriesConfig:
     """Load categorization rules from a YAML file.
 
     Expected structure::
@@ -144,7 +171,7 @@ def _normalize_desc(desc: str) -> str:
     return re.sub(r"[^\w\s]", " ", desc).upper().strip()
 
 
-def classify_by_rules(txn: TxnRow, rules: list[dict[str, Any]]) -> str | None:
+def classify_by_rules(txn: TxnRow, rules: list[RuleDict]) -> str | None:
     """Classify a single transaction using the ordered rules list.
 
     Each rule has ``category`` and ``match`` (list of keyword strings).
@@ -285,18 +312,21 @@ def detect_interbank_transfers(
         if txn.amount <= 0:
             continue
 
-        txn_date = datetime.strptime(txn.date, "%Y-%m-%d")
+        txn_date = datetime.strptime(txn.date, "%Y-%m-%d")  # noqa: DTZ007 -- date-only arithmetic, tz irrelevant
 
         for out_txn, dest_acct in outgoing_pool:
             if dest_acct != txn.account:
                 continue
-            out_date = datetime.strptime(out_txn.date, "%Y-%m-%d")
+            out_date = datetime.strptime(out_txn.date, "%Y-%m-%d")  # noqa: DTZ007 -- date-only arithmetic, tz irrelevant
             delta = abs((txn_date - out_date).days)
 
-            if delta <= 3 and out_txn.amount < 0:
-                if abs(txn.amount - abs(out_txn.amount)) < 0.01:
-                    result[txn.txn_id] = "Transfer: External"
-                    break
+            if (
+                delta <= 3
+                and out_txn.amount < 0
+                and abs(txn.amount - abs(out_txn.amount)) < 0.01
+            ):
+                result[txn.txn_id] = "Transfer: External"
+                break
 
     return result
 
@@ -350,15 +380,14 @@ def llm_classify(
         base_url = "https://api.openai.com/v1"
 
     # ---- build batch payload -----------------------------------------------
-    batch_items: list[dict[str, Any]] = []
+    batch_items: list[LlmBatchItem] = []
     for txn in uncategorized:
-        batch_items.append(
-            {
-                "txn_id": txn.txn_id,
-                "description": txn.description,
-                "amount": txn.amount,
-            }
-        )
+        item: LlmBatchItem = {
+            "txn_id": txn.txn_id,
+            "description": txn.description,
+            "amount": txn.amount,
+        }
+        batch_items.append(item)
 
     categories_str = ", ".join(known_categories)
     input_ids = {t.txn_id for t in uncategorized}
@@ -399,7 +428,7 @@ def llm_classify(
             timeout=120,
         )
         response.raise_for_status()
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 -- any LLM/HTTP failure degrades to rules-only categorization
         print(f"ERROR: LLM API call failed: {exc}", file=sys.stderr)
         return {}
 
@@ -532,7 +561,7 @@ def print_summary(txns: list[TxnRow], result: dict[str, str], *, default_categor
         for cls_name in sorted(cls_counts, key=lambda c: -cls_counts[c]):
             print(f"  {cls_name:30s} {cls_counts[cls_name]:>5d}")
 
-    print(f"\n---")
+    print("\n---")
     if n_un:
         print(f"  {f'{UNCATEGORIZED} (fallback):':30s} {n_un:>5d}")
     coverage = n_categorized / n_total * 100 if n_total else 0
@@ -571,8 +600,8 @@ def categorize(
 
     # 3. Load rules ----------------------------------------------------------
     rules_data = load_rules(rules_path)
-    rules: list[dict[str, Any]] = rules_data.get("rules", [])
-    known_categories: list[str] = rules_data.get("categories", [])
+    rules: list[RuleDict] = rules_data["rules"]
+    known_categories: list[str] = rules_data["categories"]
 
     # 4. Internal transfer pre-classification --------------------------------
     result: dict[str, str] = {}
@@ -713,7 +742,7 @@ def main(argv: list[str] | None = None) -> int:
     # ---- run pipeline ------------------------------------------------------
     try:
         txns, _, _ = parse_input(input_path)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 -- report the parse failure and exit non-zero
         print(f"ERROR parsing input: {exc}", file=sys.stderr)
         return 1
 
@@ -726,7 +755,7 @@ def main(argv: list[str] | None = None) -> int:
             api_key=args.api_key,
             base_url=args.base_url,
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 -- report the categorization failure and exit non-zero
         print(f"ERROR during categorization: {exc}", file=sys.stderr)
         return 1
 

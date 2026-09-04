@@ -9,9 +9,44 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TypedDict, cast
 
 from pfa_ir_schema import from_json
+
+
+class TxnRowDict(TypedDict):
+    """One flattened transaction row (IR-native keys, ``posted_date`` → ``date``)."""
+
+    txn_id: str
+    date: str
+    description: str
+    amount: float
+    currency: str
+    balance_after: float | None
+    bank: str
+    account: str
+    category_hint: str | None
+    tags: list[str]
+    link_labels: list[str]
+    is_internal_transfer: bool
+
+
+class AccountDict(TypedDict):
+    """Projected account metadata (no account-holder PII)."""
+
+    account_no: str
+    account_type: str
+    institution: str
+    currency: str
+
+
+class IrMeta(TypedDict):
+    """Statement-level metadata."""
+
+    ir_version: str
+    institutions: list[str]
+    period_from: str
+    period_to: str
 
 
 @dataclass
@@ -30,9 +65,9 @@ class TxnIR:
         account_types: ``account_no -> account_type`` mapping
     """
 
-    txns_raw: list[dict[str, Any]]
-    accounts_raw: list[dict[str, Any]]
-    meta: dict[str, Any]
+    txns_raw: list[TxnRowDict]
+    accounts_raw: list[AccountDict]
+    meta: IrMeta
     account_types: dict[str, str]
 
 
@@ -45,7 +80,7 @@ def parse_ir(path: Path) -> TxnIR:
     """
     statement = from_json(path.read_text(encoding="utf-8"))
 
-    txns_raw: list[dict[str, Any]] = []
+    txns_raw: list[TxnRowDict] = []
     account_types: dict[str, str] = {}
     institutions: set[str] = set()
 
@@ -53,25 +88,26 @@ def parse_ir(path: Path) -> TxnIR:
         account_no = acct.account_no
         acct_type = acct.account_type
         institution = acct.institution or ""
-        acct_currency = acct.currency
 
         account_types[account_no] = acct_type
         if institution:
             institutions.add(institution)
 
         for txn in acct.transactions:
-            extras = txn.extras or {}
+            txn_extras = txn.extras or {}
+            # ``category_hint`` is an optional free-form string written by the parser.
+            hint = cast("str | None", txn_extras.get("category_hint"))
             txns_raw.append(
                 {
                     "txn_id": txn.txn_id,
                     "date": txn.posted_date,
                     "description": txn.description,
-                    "amount": txn.amount if txn.amount is not None else 0.0,
-                    "currency": txn.currency or acct_currency,
+                    "amount": txn.amount,
+                    "currency": txn.currency,
                     "balance_after": txn.balance_after,
                     "bank": institution,
                     "account": account_no,
-                    "category_hint": extras.get("category_hint"),
+                    "category_hint": hint,
                     "tags": list(txn.tags),
                     "link_labels": list(txn.link_labels),
                     "is_internal_transfer": txn.is_internal_transfer,

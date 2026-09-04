@@ -34,20 +34,18 @@ import json
 import re
 from collections import defaultdict
 from pathlib import Path
-from typing import TypedDict, cast, NotRequired
+from typing import NotRequired, TypedDict, cast
+
+# FX rate retrieval (cached, base = SGD). Falls back to pfa_fx defaults.
+from pfa_fx import DEFAULT_FX_RATES, fetch_fx_rates
+
+# Relationship labels describing how transactions link to each other.
+from pfa_ir_schema.relations import REL_CURRENCY_CONVERSION
 
 # Internal-transfer reconciliation (and self-reference promotion) lives in the
 # standalone pfa-ir-verifier package so it can be run independently (e.g. CI)
 # without the analysis stack.
 from pfa_ir_verifier import demote_orphan_internal_transfers, promote_internal_transfers
-
-# Relationship labels describing how transactions link to each other.
-from pfa_ir_schema.relations import REL_CURRENCY_CONVERSION
-
-# FX rate retrieval (cached, base = SGD). Falls back to pfa_fx defaults.
-from pfa_fx import fetch_fx_rates
-from pfa_fx import DEFAULT_FX_RATES
-
 
 # ---------------------------------------------------------------------------
 # Internal transaction model
@@ -596,7 +594,7 @@ def compute_metrics(txns: list[Txn], meta: Meta, ccy: str,
     elif opening_override is not None and closing_override is not None:
         opening = opening_override
         closing = closing_override
-    elif (mc := meta.get("currency")) == ccy and (mo := meta.get("opening")) is not None:
+    elif meta.get("currency") == ccy and (mo := meta.get("opening")) is not None:
         opening = float(mo)
         closing = float(meta.get("closing") or 0.0)
     elif txns:
@@ -937,7 +935,7 @@ def _analyze_consolidated(raw: RawIr, meta: Meta,
     opening_by_ccy: dict[str, float] = {}
     closing_by_ccy: dict[str, float] = {}
     if not use_txn_balances:
-        for a in meta["account_summary"]:
+        for a in meta.get("account_summary") or []:
             atype = str(a.get("account_type", "")).lower()
             if atype in ("fixed", "time", "securities", "investment", *_LIABILITY_ACCOUNT_TYPES):
                 continue
@@ -1002,8 +1000,8 @@ def _analyze_consolidated(raw: RawIr, meta: Meta,
 # Report rendering — delegated to render_md.py
 # ---------------------------------------------------------------------------
 
-from pfa_analysis.categorize import UNCATEGORIZED, _split_cat  # noqa: E402
-from pfa_analysis.render_md import render_report, fmt  # noqa: E402
+from pfa_analysis.categorize import UNCATEGORIZED, _split_cat
+from pfa_analysis.render_md import fmt, render_report
 
 # Per-file processing helper
 # ---------------------------------------------------------------------------
@@ -1045,7 +1043,7 @@ def build_income_expense_drilldowns(
     expense_drill: list[IncomeExpenseGroup] = []
     try:
         _, ir_rows = _load_ir_with_txn_id(consolidated_path, start_date, end_date)
-    except Exception:
+    except Exception:  # noqa: BLE001 -- degrade to empty drilldown, never crash the report
         return income_drill, expense_drill
 
     src_ccy: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
@@ -1057,7 +1055,7 @@ def build_income_expense_drilldowns(
     if Path(categories_path).exists():
         try:
             categories = json.loads(Path(categories_path).read_text(encoding="utf-8"))
-        except Exception:
+        except Exception:  # noqa: BLE001 -- malformed categories.json degrades to {}
             categories = {}
 
     for row in ir_rows:
@@ -1190,7 +1188,7 @@ def _internal_transfer_ids(
     try:
         _, ir_rows = _load_ir_with_txn_id(consolidated_path, start_date, end_date,
                                           keep_internal=True)
-    except Exception:
+    except Exception:  # noqa: BLE001 -- degrade to an empty internal-transfer id list
         return []
     return [r.get("txn_id", "") for r in ir_rows if r.get("is_internal_transfer")]
 
@@ -1241,23 +1239,13 @@ def build_transfer_drilldown(
         # surfaces, so keep them in the loaded rows.
         _, ir_rows = _load_ir_with_txn_id(consolidated_path, start_date, end_date,
                                           keep_internal=True)
-    except Exception:
+    except Exception:  # noqa: BLE001 -- degrade to empty transfer drilldown
         return transfer_drill
-
-    categories: dict[str, str] = {}
-    if Path(categories_path).exists():
-        try:
-            categories = json.loads(Path(categories_path).read_text(encoding="utf-8"))
-        except Exception:
-            categories = {}
 
     tr_ccy: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
     tr_txns: dict[str, list[DrilldownTxn]] = defaultdict(list)
 
     for row in ir_rows:
-        txn_id = row.get("txn_id", "")
-        cat_full = categories.get(txn_id, "")
-        cat_cls, cat_sub = _split_cat(cat_full) if cat_full else ("", "")
 
         # Only own-account (internal) transfers are shown here. External transfers
         # now live in the income/expense breakdowns; currency conversions have their
@@ -1353,7 +1341,7 @@ def compute_fx_gain_loss(
     base_ccy = "SGD"
     try:
         meta, rows = _load_ir_with_txn_id(consolidated_path, start_date, end_date)
-    except Exception:
+    except Exception:  # noqa: BLE001 -- degrade to an empty FX result
         return _empty_fx_result(base_ccy)
 
     if as_of is None:

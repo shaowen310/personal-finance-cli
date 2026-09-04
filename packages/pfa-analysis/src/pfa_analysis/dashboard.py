@@ -13,25 +13,25 @@ from collections import defaultdict
 from pathlib import Path
 from typing import TypedDict, cast
 
-from pfa_fx import fetch_fx_rates  # noqa: F401  (cached; used by build_dashboard_json)
+from pfa_fx import fetch_fx_rates
+
 from pfa_analysis.analyze import (
+    _NON_CASH_ACCOUNT_TYPES,
+    UNCATEGORIZED,
+    AnalysisResult,
+    FxPair,
+    Meta,
+    TxnRow,
     _analyze_file,
     _classify_discretionary,
     _load_ir_with_txn_id,
-    AnalysisResult,
-    compute_fx_gain_loss,
-    FxPair,
-    Meta,
-    _NON_CASH_ACCOUNT_TYPES,
     _split_cat,
     classify_cash_flow,
+    compute_fx_gain_loss,
     parse_date_to_iso,
     parse_num,
-    TxnRow,
-    UNCATEGORIZED,
 )
 from pfa_analysis.render_md import FxWrapper, convert_to_sgd
-
 
 # ---------------------------------------------------------------------------
 # Typed shapes for the assembled dashboard (no ``Any``)

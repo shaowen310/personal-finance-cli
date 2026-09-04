@@ -18,6 +18,8 @@ import tempfile
 from pathlib import Path
 from typing import Any, cast
 
+from pfa_fx import fetch_fx_rates
+
 from pfa_analysis.analyze import (
     _analyze_file,
     build_fx_drilldown,
@@ -26,7 +28,6 @@ from pfa_analysis.analyze import (
     parse_date_to_iso,
 )
 from pfa_analysis.categorize import UNCATEGORIZED
-from pfa_fx import fetch_fx_rates
 from pfa_analysis.dashboard import DashboardData, build_dashboard_json
 from pfa_analysis.render_md import CatSummaryEntry, render_report
 

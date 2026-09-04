@@ -17,7 +17,8 @@ from collections import defaultdict
 from datetime import datetime
 from typing import TYPE_CHECKING, TypedDict, cast
 
-from pfa_fx import BASE_CCY, FxWrapper, convert_to_sgd as pfa_convert_to_sgd
+from pfa_fx import BASE_CCY, FxWrapper
+from pfa_fx import convert_to_sgd as pfa_convert_to_sgd
 
 if TYPE_CHECKING:
     from pfa_analysis.analyze import (
@@ -207,13 +208,13 @@ def render_report(result: AnalysisResult, consolidated: bool = False,
     # ---- Title ---------------------------------------------------------------
     title = "Consolidated Balance Sheet & Funds Flow" if consolidated else "Personal Balance Sheet & Funds Flow"
     out.append(f"# {title} \u2014 {result['source']}\n")
-    out.append(f"_Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}_\n")
+    out.append(f"_Generated: {datetime.now().astimezone().strftime('%Y-%m-%d %H:%M')}_\n")
     if not consolidated:
         out.append(f"**Institution:** {meta.get('bank', '')}  ")
         out.append(f"**Account:** {meta.get('account_no', '')}  ")
         out.append(f"**Period:** {meta.get('period_start', '?')} \u2192 {meta.get('period_end', '?')}  ")
         if meta.get("source_file"):
-            out.append(f"**Source file:** `{meta['source_file']}`  ")
+            out.append(f"**Source file:** `{meta.get('source_file', '')}`  ")
         out.append(f"**Currencies:** {', '.join(sorted(mbc)) if mbc else '\u2014'}\n")
     else:
         out.append("**Scope:** consolidated balances across all input accounts, per currency.\n")
@@ -352,8 +353,7 @@ def render_report(result: AnalysisResult, consolidated: bool = False,
 
     # Build the header.
     header_parts = ["| Asset / Liability"]
-    for c in ccies:
-        header_parts.append(c)
+    header_parts.extend(ccies)
     if use_fx:
         assert fx_rates is not None
         header_parts.append("SGD Eq.")
@@ -381,10 +381,7 @@ def render_report(result: AnalysisResult, consolidated: bool = False,
                 v = -v
             vals.append(fmt(v))
             row_native += v
-            if use_fx and not is_lia:
-                s = convert_to_sgd(v, c, fx_rates) or 0.0
-                row_sgd += s
-            elif use_fx and is_lia:
+            if use_fx and not is_lia or use_fx and is_lia:
                 s = convert_to_sgd(v, c, fx_rates) or 0.0
                 row_sgd += s
         if label == "Investments":
@@ -527,9 +524,9 @@ def render_report(result: AnalysisResult, consolidated: bool = False,
     if income_drilldown:
         out.append("## Income Breakdown\n")
         # Collect all currencies across all sources.
-        income_ccies: list[str] = sorted(set(
+        income_ccies: list[str] = sorted({
             c for entry in income_drilldown for c in entry["by_currency"]
-        ))
+        })
         header_parts = ["| Source"]
         for c in income_ccies:
             header_parts.append(c)
@@ -570,7 +567,7 @@ def render_report(result: AnalysisResult, consolidated: bool = False,
             total_parts.append(f"**{fmt(tot_sgd)}**")
             out.append(" | ".join(total_parts) + " |")
         elif not use_fx:
-            out.append(f"| **Total Income (per currency above)** | | |")
+            out.append("| **Total Income (per currency above)** | | |")
         out.append("")
 
         income_detail_totals = _render_txn_detail_table(
@@ -582,9 +579,9 @@ def render_report(result: AnalysisResult, consolidated: bool = False,
     # ---- Expense Breakdown ---------------------------------------------------
     if expense_drilldown:
         out.append("## Expense Breakdown\n")
-        expense_ccies: list[str] = sorted(set(
+        expense_ccies: list[str] = sorted({
             c for entry in expense_drilldown for c in entry["by_currency"]
-        ))
+        })
         header_parts = ["| Category"]
         for c in expense_ccies:
             header_parts.append(c)
@@ -601,7 +598,7 @@ def render_report(result: AnalysisResult, consolidated: bool = False,
         totals_sgd = 0.0
         expense_summary_sgd: dict[str, float] = {}
         for entry in expense_drilldown:
-            cat = entry["category"]
+            cat = entry.get("category", "")
             by_ccy = entry["by_currency"]
             expense_cells: list[str] = [cat]
             row_sgd = 0.0
@@ -625,7 +622,7 @@ def render_report(result: AnalysisResult, consolidated: bool = False,
             total_parts.append(f"**{fmt(totals_sgd)}**")
             out.append(" | ".join(total_parts) + " |")
         elif not use_fx:
-            out.append(f"| **Total Expense (per currency above)** | | |")
+            out.append("| **Total Expense (per currency above)** | | |")
         out.append("")
 
         expense_detail_totals = _render_txn_detail_table(
@@ -655,9 +652,9 @@ def render_report(result: AnalysisResult, consolidated: bool = False,
             "expense and the funds flow. Individual transactions follow below (same layout "
             "as the income/expense breakdowns)._\n"
         )
-        int_ccies: list[str] = sorted(set(
+        int_ccies: list[str] = sorted({
             c for entry in transfer_drilldown for c in entry["by_currency"]
-        ))
+        })
         header_parts = ["| Category"]
         for c in int_ccies:
             header_parts.append(c)
@@ -738,7 +735,7 @@ def render_report(result: AnalysisResult, consolidated: bool = False,
         combined_txns: list[DrilldownTxn] = []
         for entry in transfer_drilldown:
             for t in entry.get("transactions", []):
-                d = cast(DrilldownTxn, dict(t))
+                d = cast("DrilldownTxn", dict(t))
                 d["amount"] = _it_display_amount(t)
                 combined_txns.append(d)
         if combined_txns:
@@ -819,7 +816,7 @@ def render_report(result: AnalysisResult, consolidated: bool = False,
         assert fx_rates is not None  # guaranteed by use_fx
         out.append("## 5. FX Rates Reference\n")
         out.append(
-            f"All non-SGD balances above are converted at the statement-period-end rate "
+            "All non-SGD balances above are converted at the statement-period-end rate "
             + f"(**{fx_rates['date']}**) sourced from **{fx_rates['source']}** "
             + "(ECB reference rates via Frankfurter API). Rates shown are SGD per 1 unit of "
             + "foreign currency, limited to the currencies present in this report.\n"
@@ -845,7 +842,7 @@ def render_report(result: AnalysisResult, consolidated: bool = False,
     if use_fx:
         assert fx_rates is not None  # guaranteed by use_fx
         out.append(
-            f"- Multi-currency amounts are converted to SGD at the statement-period-end rate "
+            "- Multi-currency amounts are converted to SGD at the statement-period-end rate "
             + f"({fx_rates['date']}) from {fx_rates['source']}; the SGD Equivalent column and the "
             + "SGD net position reflect real value. Source rate table is in section 5 above.\n"
         )
