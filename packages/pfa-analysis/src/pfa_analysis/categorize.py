@@ -1,11 +1,11 @@
-"""Transaction categorization from bank-ir-consolidate IR JSON exports.
+"""Transaction categorization from a consolidated bank-statement IR JSON.
 
 Classifies transactions using rule-first matching (from a YAML rules file)
 with optional LLM fallback for uncategorized items.  Detects external
 transfers to prevent double-counting as spend or income.
 
 CLI:
-    python categorize.py export.ir.json -o categories.json \\
+    python categorize.py consolidated.ir.json -o categories.json \\
         [--rules rules.yaml] [--llm] [--model gpt-4o-mini]
 """
 from __future__ import annotations

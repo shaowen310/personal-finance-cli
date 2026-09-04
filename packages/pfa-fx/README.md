@@ -24,7 +24,7 @@ All rates are **SGD per 1 unit of foreign currency**:
 ```
 
 `convert_to_sgd(amount, currency, rates)` therefore multiplies: `amount * rate`.
-This matches `pfa-ir-consolidator`'s `DEFAULT_FX_RATES` and `txn_table_model`.
+This matches `pfa-ir-consolidator`'s `DEFAULT_FX_RATES`.
 The Frankfurter API returns *units per 1 base currency*, so we invert to the
 SGD-per-unit shape on retrieval.
 

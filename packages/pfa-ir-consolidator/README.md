@@ -22,10 +22,9 @@ The original `bank-ir-consolidate` skill has been absorbed into this package.
   math doesn't double-count.
 - **FX** — convert non-SGD balances to SGD-equivalent via live mid-market
   rates (with cache + fallback), never crashes on network failure.
-- **Category merge** — fold categorizer output (`categories.json`, produced
-  by `pfa-analysis`) back into the consolidated IR.
-- **Txn-table model** — build/serialize the de-identified `TxnTableModel` JSON
-  that `pfa-analysis` categorization consumes.
+
+Categorization (rule-first with LLM fallback) and report rendering live in
+[`pfa-analysis`](../pfa-analysis), which consumes the consolidated IR directly.
 
 ## Supported inputs
 
@@ -92,15 +91,6 @@ consolidated = consolidate_statements(stmts)
 out = to_json(consolidated)
 ```
 
-Helper entry points also available:
-
-- `export_model` — CLI that serializes to the `TxnTableModel` JSON consumed by
-  `pfa-analysis` categorization (no account-holder PII).
-- `merge_categories.merge_categories(ir, categories_json, ...)` — fold
-  categorizer output back into the consolidated IR.
-- `txn_table_model.build_txn_table_model(ir, ...)` — build the in-memory
-  txn-table model.
-
 ## Repo layout
 
 ```
@@ -112,11 +102,7 @@ pfa-ir-consolidator/
         ├── __init__.py       # consolidate_statements, main
         ├── consolidate.py    # merge + dedup + provenance
         ├── link_transfers.py  # inter/intra-bank, currency conversion, CC payment linking
-        ├── fx_rates.py       # back-compat shim → pfa-fx (live FX fetch + cache + fallback)
-        ├── txn_table_model.py   # in-memory txn-table model (categorizer interchange)
-        ├── txn_table_model_io.py
-        ├── export_model.py   # consolidated IR -> TxnTableModel JSON (for categorizer)
-        └── merge_categories.py  # fold categorizer output back into IR
+        └── fx_rates.py       # back-compat shim → pfa-fx (live FX fetch + cache + fallback)
 ```
 
 ## Public IR contract
