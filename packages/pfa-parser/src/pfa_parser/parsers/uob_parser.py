@@ -169,15 +169,18 @@ def parse_uob_txn(pdf: Any):
 
             # BALANCE B/F — opening balance row, no date column. Must be
             # checked BEFORE the date-row check, because a "DD Mon" prefix
-            # also matches the x-bands.
-            m_bf = re.match(r"^(\d{1,2}\s+[A-Za-z]{3}\s+BALANCE\s+B/F)\s+([\d,]+\.\d{2})$", t2)
-            if not m_bf:
-                m_bf = re.match(r"^BALANCE\s+B/F\s+([\d,]+\.\d{2})$", t2)
+            # also matches the x-bands. The line may carry a date prefix, an
+            # optional currency token, and an optional "OD" overdraft suffix
+            # (e.g. "01 Aug BALANCE B/F 1,408.00OD" => -1,408.00).
+            m_bf = re.match(
+                r"^(?:\d{1,2}\s+[A-Za-z]{3}\s+)?BALANCE\s+B/F"
+                r"(?:\s+[A-Z]{3})?\s+(-?\d{1,3}(?:,\d{3})*\.\d{2})(OD)?$",
+                t2,
+            )
             if m_bf:
-                opening_balance = m_bf.group(1) if m_bf.lastindex and m_bf.lastindex >= 2 else m_bf.group(0).split()[-1]
-                if not re.match(r"^[\d,]+\.\d{2}$", opening_balance):
-                    # m_bf was the "DD Mon BALANCE B/F" form; grab the amount.
-                    opening_balance = m_bf.group(2) if m_bf.lastindex and m_bf.lastindex >= 2 else ""
+                opening_balance = m_bf.group(1)
+                if m_bf.group(2) and not opening_balance.startswith("-"):
+                    opening_balance = "-" + opening_balance
                 i += 1
                 continue
 
@@ -575,14 +578,21 @@ def _parse_uob_one_section(lines: list[list[WordDict]]) -> dict[str, Any] | None
                     total["balance"] = w["text"]
             break
 
-        # BALANCE B/F — opening balance, may carry a date prefix.
-        m_bf = re.match(r"^(\d{1,2}\s+[A-Za-z]{3}\s+BALANCE\s+B/F)\s+([\d,]+\.\d{2})$", text)
-        if not m_bf:
-            m_bf = re.match(r"^BALANCE\s+B/F\s+([\d,]+\.\d{2})$", text)
+        # BALANCE B/F — opening balance. It may carry a "DD Mon" date prefix,
+        # an optional currency token (multi-currency statements), and an optional
+        # "OD" overdraft suffix meaning the balance is negative
+        # (e.g. "01 Aug BALANCE B/F 1,408.00OD" => -1,408.00). The previous
+        # regex rejected the OD suffix, so the row fell through and was
+        # mis-parsed as a normal transaction (a zero-amount "BALANCE B/F" row).
+        m_bf = re.match(
+            r"^(?:\d{1,2}\s+[A-Za-z]{3}\s+)?BALANCE\s+B/F"
+            r"(?:\s+[A-Z]{3})?\s+(-?\d{1,3}(?:,\d{3})*\.\d{2})(OD)?$",
+            text,
+        )
         if m_bf:
-            opening_balance = m_bf.group(2) if m_bf.lastindex and m_bf.lastindex >= 2 else m_bf.group(1)
-            if not re.match(r"^[\d,]+\.\d{2}$", opening_balance):
-                opening_balance = m_bf.group(2) if m_bf.lastindex and m_bf.lastindex >= 2 else ""
+            opening_balance = m_bf.group(1)
+            if m_bf.group(2) and not opening_balance.startswith("-"):
+                opening_balance = "-" + opening_balance
             i += 1
             continue
 

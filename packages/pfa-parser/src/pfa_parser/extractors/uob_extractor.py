@@ -187,6 +187,7 @@ class UOBOneExtractor(BaseExtractor):
                 account_no=acc_no,
                 account_type=_uob_account_type(acc_name),
                 currency=str(acct.get("currency", base_ccy)),
+                opening_balance=_parse_amount(acct.get("opening_balance")),
                 closing_balance=_parse_amount(dep.get("balance")),
                 extras={"credit_line": dep.get("credit_line"),
                         "interest_earned": dep.get("interest_earned"),
