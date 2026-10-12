@@ -107,7 +107,7 @@ class UOBTxnExtractor(BaseExtractor):
         for t in transactions:
             withdrawal = _parse_amount(t.get("withdrawal", ""))
             deposit = _parse_amount(t.get("deposit", ""))
-            amount = (deposit or 0.0) - (withdrawal or 0.0)
+            amount = (deposit or Decimal(0)) - (withdrawal or Decimal(0))
             balance = _parse_amount(t.get("balance", ""))
 
             _ = builder.add_transaction(
@@ -196,7 +196,7 @@ class UOBOneExtractor(BaseExtractor):
             for t in acct.get("transactions", []):
                 withdrawal = _parse_amount(t.get("withdrawal", ""))
                 deposit = _parse_amount(t.get("deposit", ""))
-                amount = (deposit or 0.0) - (withdrawal or 0.0)
+                amount = (deposit or Decimal(0)) - (withdrawal or Decimal(0))
                 balance = _parse_amount(t.get("balance", ""))
 
                 _ = builder.add_transaction(
