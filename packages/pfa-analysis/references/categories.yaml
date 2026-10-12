@@ -114,6 +114,7 @@ rules:
       - FRESH FRUITS
       - MITSUKO
       - HYPERMARKET
+      - MARKETPLACE
 
   # =========================================================================
   # 3. Dining — restaurants, cafes, food courts, bakeries, delivery
@@ -139,7 +140,8 @@ rules:
       - IPPUDO
       - COCO ICHIBANYA
       - SOUP
-      - HAGWON
+      - YAPPARI
+      - HAWON
       - LEE BAI
       # Cafes & bubble tea
       - STARBUCKS
