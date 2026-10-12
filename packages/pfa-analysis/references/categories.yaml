@@ -149,6 +149,8 @@ rules:
       - BUTAHAGE
       - HAWON
       - LEE BAI
+      - OMMA CHICKEN
+      - CHICKEN SOUP
       # Cafes & bubble tea
       - STARBUCKS
       - KOI
@@ -170,9 +172,8 @@ rules:
       # Bakeries
       - SWEE HENG
       - TOSUTA
-      # Chicken / soup / speciality
-      - OMMA CHICKEN
-      - CHICKEN SOUP
+      # Western
+      - ST LOUIS HIGH STREET
       # Desert
       - 99 OLD TREES DURIAN
       - MESSINA
@@ -205,6 +206,7 @@ rules:
       - HANDS
       - ISSEY MIYAKE
       - PLANET TRAVELLER
+      - NBS UPTOWN
       # Souvenirs
       - BACHA COFFEE
       # Cosmetics / perfumes
