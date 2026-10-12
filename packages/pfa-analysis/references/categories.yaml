@@ -112,7 +112,8 @@ rules:
       - SHENG SIONG
       - GIANT
       - FRESH FRUITS
-      - MITSUKOSHI
+      - MITSUKO
+      - HYPERMARKET
 
   # =========================================================================
   # 3. Dining — restaurants, cafes, food courts, bakeries, delivery
@@ -121,20 +122,25 @@ rules:
   - category: "Expense: Dining"
     match:
       # Fast food
-      - MCDONALD
+      - MCDO
       - KFC
       - BURGER KING
       - SUBWAY
       - LONG JOHN SILVER
       - MOS BURGER
+      - SHAKE SHACK
       # Japanese / Asian chains
       - SUKIYA
       - WOK HEY
       - GUZMAN
       - MODUAMY
       - RAMEN
+      - BENTO
       - IPPUDO
       - COCO ICHIBANYA
+      - SOUP
+      - HAGWON
+      - LEE BAI
       # Cafes & bubble tea
       - STARBUCKS
       - KOI
@@ -142,8 +148,9 @@ rules:
       - COMPOSE COFFEE
       - NYLON COFFEE
       - TULLYS COFFEE
-      - THE DAILY CUT
+      - DAILY CUT
       - TOMOCAFE
+      - COFFEE BEAN
       # Food courts / hawker
       - HAWKER
       - KOPITIAM
@@ -186,10 +193,14 @@ rules:
       - UNIQLO
       - HANDS
       - ISSEY MIYAKE
+      - PLANET TRAVELLER
       # Souvenirs
       - BACHA COFFEE
       # Cosmetics / perfumes
       - RU RABO
+      # Duty Free
+      - LOTTE DUTY FREE
+      - SHILLA
 
   # =========================================================================
   # 5. Travel — flights, hotels, OTAs, travel activities
