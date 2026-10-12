@@ -115,7 +115,7 @@ def parse_input(path: Path) -> tuple[list[TxnRow], list[AccountDict], IrMeta]:
 # ---------------------------------------------------------------------------
 
 DEFAULT_RULES_PATH = (
-    Path(__file__).resolve().parent.parent / "references" / "categories.yaml"
+    Path(__file__).resolve().parent.parent.parent / "references" / "categories.yaml"
 )
 
 

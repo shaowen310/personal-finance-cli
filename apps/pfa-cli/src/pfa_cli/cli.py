@@ -225,6 +225,8 @@ def run(month: str, input_dir: str, output_dir: str, rules_path: str | None,
 
     # 4. Categorize transactions.
     rules = Path(rules_path) if rules_path else DEFAULT_RULES_PATH
+    if not rules.exists():
+        raise click.BadParameter(f"Categorization rules not found: {rules}")
     categories = categorize(consolidated_path, rules, use_llm=llm)
     cat_path = out_dir / "categories.json"
     write_categories(categories, cat_path)
