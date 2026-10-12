@@ -1,7 +1,7 @@
-"""Shared IR JSON parser for categorization tools.
+"""Shared IR JSON loader for categorization tools.
 
-Parses consolidated.ir.json (from bank-ir-consolidate) into a unified
-``TxnIR`` dataclass consumed by the categorization pipeline.
+Loads consolidated.ir.json (from bank-ir-consolidate) into a unified
+``AnalysisTxns`` dataclass consumed by the categorization pipeline.
 
 Schema aligned with pfa_ir_schema.ir_schema.
 """
@@ -50,7 +50,7 @@ class IrMeta(TypedDict):
 
 
 @dataclass
-class TxnIR:
+class AnalysisTxns:
     """Parsed intermediate representation of bank transactions.
 
     Attributes:
@@ -71,7 +71,7 @@ class TxnIR:
     account_types: dict[str, str]
 
 
-def parse_ir(path: Path) -> TxnIR:
+def load_ir(path: Path) -> AnalysisTxns:
     """Parse a consolidated IR JSON file via the official schema.
 
     Iterates ``accounts[].transactions[]``, flattening all rows and
@@ -115,7 +115,7 @@ def parse_ir(path: Path) -> TxnIR:
                 }
             )
 
-    return TxnIR(
+    return AnalysisTxns(
         txns_raw=txns_raw,
         accounts_raw=[
             {

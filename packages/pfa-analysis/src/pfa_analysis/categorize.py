@@ -19,7 +19,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import TypedDict
 
-from pfa_analysis.txn_ir import AccountDict, IrMeta, parse_ir
+from pfa_analysis.ir_loader import AccountDict, IrMeta, load_ir
 from pfa_analysis.types import TxnRow
 
 # ---------------------------------------------------------------------------
@@ -81,7 +81,7 @@ def parse_input(path: Path) -> tuple[list[TxnRow], list[AccountDict], IrMeta]:
     ``accounts`` array, and **meta** holds ``ir_version``, ``institutions``,
     ``period_from``, ``period_to``.
     """
-    ir_data = parse_ir(path)
+    ir_data = load_ir(path)
 
     # Build account_no → account_type lookup from raw accounts.
     acct_types: dict[str, str] = {
