@@ -60,6 +60,7 @@ from __future__ import annotations
 
 import re
 from datetime import date, datetime
+from decimal import Decimal
 from typing import cast
 
 # JSONValue lives in the schema submodule but is not re-exported by the
@@ -89,6 +90,23 @@ _TRANSFER_KEYWORD_RE = re.compile(
 def _is_transfer_like(description: str) -> bool:
     """Return True if the description looks like a transfer between accounts."""
     return bool(_TRANSFER_KEYWORD_RE.search(description or ""))
+
+
+# Tokens that mark the current-account side of a genuine credit-card payment.
+# A real CC payment posts on the current account with a description such as
+# "PAYMENT", "PAYMENT THANK YOU", or "CC PAYMENT". Requiring this token on the
+# current-account side prevents unrelated same-day, equal-magnitude lines (e.g.
+# an INTEREST CREDIT on the savings account paired with a CCY CONVERSION FEE on
+# the card) from being wrongly linked as an internal "cc_payment" transfer.
+_CC_PAYMENT_TOKEN_RE = re.compile(
+    r"(payment thank you|cc payment|payment)",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_cc_payment(description: str) -> bool:
+    """Return True if the current-account description looks like a CC payment."""
+    return bool(_CC_PAYMENT_TOKEN_RE.search(description or ""))
 
 
 def _parse_posted_date(posted_date: str | None) -> "date | None":
@@ -517,12 +535,16 @@ def link_cc_payments(statement: ParsedStatement) -> ParsedStatement:
       1. Same institution
       2. One ``current`` account + one ``credit_card`` account
       3. Same ``posted_date``
-      4. Same absolute amount (magnitudes match within ``1e-2``):
-         ``abs(abs(A.amount) - abs(B.amount)) < 1e-2``
+      4. Exactly the same absolute amount (no tolerance):
+         ``abs(A.amount) == abs(B.amount)``
          (CC payment credits are negative in card accounting, same sign as
          the CA debit — we compare magnitudes, not sums.)
-      5. Different account numbers
-      6. Neither transaction already flagged ``is_internal_transfer``
+      5. The current-account side's description must look like a payment
+         (contain a "payment" / "payment thank you" / "cc payment" token).
+         This rejects unrelated same-day, equal-magnitude lines such as an
+         INTEREST CREDIT paired with a CCY CONVERSION FEE.
+      6. Different account numbers
+      7. Neither transaction already flagged ``is_internal_transfer``
 
     Mutates and returns *statement*. Idempotent (skips already-linked txns).
 
@@ -593,11 +615,19 @@ def link_cc_payments(statement: ParsedStatement) -> ParsedStatement:
                 if acct_a.account_no == acct_b.account_no:
                     continue
 
-                # Must be matching absolute amounts (within tolerance).
-                # In credit card accounting, a payment to the card is a credit
+                # The current-account side must look like a payment. This rejects
+                # unrelated same-day, equal-magnitude lines (e.g. an INTEREST
+                # CREDIT on the savings account paired with a CCY CONVERSION FEE
+                # on the card) from being falsely linked as a CC payment.
+                ca_txn = txn_a if role_a == "current" else txn_b
+                if not _looks_like_cc_payment(ca_txn.description):
+                    continue
+
+                # Must be EXACTLY the same absolute amount (no tolerance). In
+                # credit card accounting, a payment to the card is a credit
                 # (negative amount reducing the balance owed), same sign as the
                 # current account debit — so we compare magnitudes, not sums.
-                if abs(abs(txn_a.amount) - abs(txn_b.amount)) > 1e-2:
+                if Decimal(abs(txn_a.amount)) != Decimal(abs(txn_b.amount)):
                     continue
 
                 # Match found — cross-link.
