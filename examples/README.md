@@ -47,7 +47,7 @@ or `one` (OCBC ONE / UOB ONE account). If you have more than one card or account
 of the same type at a bank, append a short, **non-personal** suffix of your
 choosing (e.g. `cc_amex` or `sa_joint`) to tell them apart. The parser reads the
 bank and account from the PDF *content*, not the filename, so the suffix is only
-for your own organization — avoid embedding real account/card numbers.
+for your own organization.
 
 ## Step 2 — Convert PDFs → IR
 
