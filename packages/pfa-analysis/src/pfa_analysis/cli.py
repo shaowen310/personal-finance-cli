@@ -38,7 +38,13 @@ def _add_analyze_args(p: argparse.ArgumentParser) -> None:
         action="store_true",
         help="Output dashboard_data.json instead of Markdown",
     )
-    _ = p.add_argument("--categories", help="Path to categories.json from txn-categorize")
+    _ = p.add_argument("--categories", help="Path to categories.json (skips auto-categorization)")
+    _ = p.add_argument("--rules", help="Categorization rules YAML (default: package references/categories.yaml)")
+    _ = p.add_argument("--llm", action="store_true", help="Use LLM fallback for uncategorized transactions")
+    _ = p.add_argument("--model", default="gpt-4o-mini", help="LLM model name (default: gpt-4o-mini)")
+    _ = p.add_argument("--api-key", help="OpenAI API key (default: $OPENAI_API_KEY)")
+    _ = p.add_argument("--base-url", help="OpenAI-compatible base URL (default: $OPENAI_BASE_URL or https://api.openai.com/v1)")
+    _ = p.add_argument("--no-categorize", action="store_true", help="Skip auto-categorization (use existing categories.json or none)")
     _ = p.add_argument(
         "--cost-basis",
         help="Path to cost_basis.json for unrealized P&L (for --dashboard-json)",
@@ -98,10 +104,39 @@ def _run_analyze(args: argparse.Namespace) -> int:
         print(f"  categories: {cats_loaded}  cost_basis: {cost_loaded}")
         return 0
 
+    # ---- categorization ---------------------------------------------------
+    # Unless an explicit --categories file is given, auto-generate
+    # categories.json next to the IR (reusing an existing one if present).
+    categories_path = in_path.with_name("categories.json")
+    if args.no_categorize:
+        if not categories_path.exists():
+            categories_path = None
+    elif args.categories:
+        categories_path = Path(args.categories)
+    elif categories_path.exists():
+        print(f"Reusing existing categories: {categories_path.name}")
+    else:
+        rules = Path(args.rules) if args.rules else DEFAULT_RULES_PATH
+        print(f"Categorizing transactions (rules: {rules.name if rules.exists() else 'MISSING'})...")
+        try:
+            cats = categorize(
+                in_path,
+                rules,
+                use_llm=args.llm,
+                model=args.model,
+                api_key=args.api_key,
+                base_url=args.base_url,
+            )
+            write_categories(cats, categories_path)
+            print(f"Categorized -> {categories_path.name} ({len(cats)} transactions)")
+        except Exception as exc:  # noqa: BLE001 -- degrade to Uncategorized
+            print(f"WARNING: categorization failed ({exc}); report will show Uncategorized.", file=sys.stderr)
+            categories_path = None
+
     # Standard Markdown mode (single file, which may be a consolidated IR).
     text = render_consolidated_report(
         in_path,
-        categories_path=args.categories,
+        categories_path=categories_path,
         start_date=args.start_date,
         end_date=args.end_date,
     )

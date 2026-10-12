@@ -69,20 +69,43 @@ def parse(input_path: str, output_path: str | None) -> None:
               help="Path to consolidated IR JSON (default: tests/outputs/consolidated.ir.json)")
 @click.option("-o", "--output", default=None,
               help="Output directory (default: alongside input)")
+@click.option("--rules", "rules_path", default=None,
+              help="Categorization rules YAML (default: package references/categories.yaml)")
+@click.option("--llm", is_flag=True, help="Use LLM fallback for uncategorized transactions")
+@click.option("--model", default="gpt-4o-mini", help="LLM model name (default: gpt-4o-mini)")
+@click.option("--api-key", default=None,
+              help="OpenAI API key (default: $OPENAI_API_KEY)")
+@click.option("--base-url", default=None,
+              help="OpenAI-compatible base URL (default: $OPENAI_BASE_URL or https://api.openai.com/v1)")
+@click.option("--no-categorize", is_flag=True,
+              help="Skip auto-categorization (use existing categories.json or none)")
 def analyze(month: str | None, start_date: str | None, end_date: str | None,
-            input_path: str | None, output: str | None) -> None:
+            input_path: str | None, output: str | None, rules_path: str | None,
+            llm: bool, model: str, api_key: str | None, base_url: str | None,
+            no_categorize: bool) -> None:
     """Run financial analysis for a date range.
 
     Date formats:
       - YYYYMMDD for exact dates (e.g. 20260801)
       - YYYYMM for whole months (e.g. 202608 for August 2026)
 
+    Categorization:
+      When no explicit --categories file is supplied, this command
+      auto-generates categories.json next to the consolidated IR (reusing an
+      existing one if present) so the report shows categorized income/expense.
+      Use --no-categorize to skip this and report raw (Uncategorized) data.
+
     \b
     Examples:
       pfa analyze -m 202608
       pfa analyze -s 20260801 -e 20260810
-      pfa analyze -s 202608 -e 202608
+      pfa analyze -s 202608 -e 202608 --llm
     """
+    from pfa_analysis.categorize import (
+        categorize,
+        write_categories,
+        DEFAULT_RULES_PATH,
+    )
     from pfa_analysis.report import render_consolidated_report
 
     # Resolve input path
@@ -134,12 +157,46 @@ def analyze(month: str | None, start_date: str | None, end_date: str | None,
 
     click.echo(f"Running analysis for {date_label}...")
 
-    # Categories path (alongside consolidated IR)
+    # ---- categorization ---------------------------------------------------
+    # Default location for categories.json is alongside the consolidated IR.
     categories_path = in_path.with_name("categories.json")
+    if no_categorize:
+        # Honour an existing categories.json, but never generate one.
+        if not categories_path.exists():
+            categories_path = None
+    else:
+        if categories_path.exists():
+            click.echo(f"Reusing existing categories: {categories_path.name}")
+        else:
+            rules = Path(rules_path) if rules_path else DEFAULT_RULES_PATH
+            click.echo(
+                "Categorizing transactions (rules: "
+                f"{rules.name if rules.exists() else 'MISSING — few categories'})..."
+            )
+            try:
+                cats = categorize(
+                    in_path,
+                    rules,
+                    use_llm=llm,
+                    model=model,
+                    api_key=api_key,
+                    base_url=base_url,
+                )
+                write_categories(cats, categories_path)
+                click.echo(
+                    f"Categorized -> {categories_path.name} ({len(cats)} transactions)"
+                )
+            except Exception as exc:  # noqa: BLE001 -- degrade to Uncategorized
+                click.echo(
+                    f"WARNING: categorization failed ({exc}); "
+                    "report will show Uncategorized.",
+                    err=True,
+                )
+                categories_path = None
 
     md = render_consolidated_report(
         in_path,
-        categories_path=categories_path if categories_path.exists() else None,
+        categories_path=categories_path,
         start_date=final_start,
         end_date=final_end,
     )
