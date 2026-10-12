@@ -7,7 +7,6 @@ from typing import cast
 import click
 from pfa_ir_consolidator import (
     consolidate_statements,
-    embed_fx_rates,
 )
 from pfa_ir_schema import ParsedStatement, from_json
 from pfa_parser import SGBankPDFParser
@@ -235,7 +234,7 @@ def run(month: str, input_dir: str, output_dir: str, rules_path: str | None,
         DEFAULT_RULES_PATH,
     )
     from pfa_analysis.report import render_consolidated_report
-    from pfa_ir_consolidator import consolidate_statements, embed_fx_rates
+    from pfa_ir_consolidator import consolidate_statements
     from pfa_ir_schema import from_json
     from pfa_parser import SGBankPDFParser
 
@@ -271,7 +270,6 @@ def run(month: str, input_dir: str, output_dir: str, rules_path: str | None,
     consolidated, total_in, deduped, filtered = consolidate_statements(
         stmts, do_dedup=True
     )
-    consolidated = embed_fx_rates(consolidated)
     consolidated_path = out_dir / "consolidated.ir.json"
     _ = consolidated_path.write_text(consolidated.to_json(indent=2), encoding="utf-8")
     total_out = total_in - deduped - filtered
@@ -342,7 +340,6 @@ def consolidate(inputs: tuple[str, ...], out_path: str, min_ir_version: str,
     consolidated, total_in, deduped, filtered = consolidate_statements(
         stmts_with_paths, do_dedup=not no_dedup
     )
-    consolidated = embed_fx_rates(consolidated)
 
     consolidation = cast("dict[str, object]", (consolidated.extras or {}).get("consolidation", {}))
     transfers = cast("dict[str, object]", consolidation.get("transfers", {}))

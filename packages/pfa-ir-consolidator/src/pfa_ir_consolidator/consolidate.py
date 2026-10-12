@@ -13,6 +13,7 @@ from __future__ import annotations
 import re
 import sys
 from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 from typing import TypedDict, cast
 
@@ -59,7 +60,7 @@ DEFAULT_MIN_IR_VERSION = "2026.4"
 class _PromoteRow(TypedDict):
     """Row shape consumed by ``pfa_ir_verifier.promote_internal_transfers``."""
 
-    amount: float
+    amount: Decimal
     description: str
     is_internal_transfer: bool
     txn_id: str
@@ -250,7 +251,7 @@ def consolidate_statements(
         for acc in merged_accounts:
             for t in acc.transactions:
                 flat_rows.append({
-                    "amount": float(t.amount),
+                    "amount": t.amount,
                     "description": str(t.description or ""),
                     "is_internal_transfer": bool(t.is_internal_transfer),
                     "txn_id": t.txn_id,
@@ -361,13 +362,13 @@ def embed_fx_rates(
     """Embed an FX rate block into a consolidated ``ParsedStatement``.
 
     .. note::
-        FX rates are **no longer embedded by default**. The analysis package
-        fetches rates as of the reporting cut-off date and caches them in the
-        on-disk cache (``pfa_fx.cache``), so the IR stays free of
-        build-date snapshots that would mislead readers ("as of 2026-08-18"
-        inside a July statement). This helper is kept only for callers that
-        explicitly want an inline FX block (e.g. ``--embed-fx``); the app CLI
-        calls it only when ``--embed-fx`` is passed.
+        FX rates are **not embedded by default**. The analysis package fetches
+        rates as of the reporting cut-off date and caches them in the on-disk
+        cache (``pfa_fx.cache``), so the IR stays free of build-date snapshots
+        that would mislead readers ("as of 2026-08-18" inside a July statement).
+        This helper is opt-in: the app CLI does **not** embed FX, and
+        ``consolidate_statements`` never calls it. Invoke this helper explicitly
+        only when an inline FX block is genuinely required.
 
     The embedded block, when present, is stored in the canonical shape:
 

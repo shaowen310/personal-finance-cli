@@ -45,7 +45,11 @@ from pfa_ir_schema.relations import REL_CURRENCY_CONVERSION
 # Internal-transfer reconciliation (and self-reference promotion) lives in the
 # standalone pfa-ir-verifier package so it can be run independently (e.g. CI)
 # without the analysis stack.
-from pfa_ir_verifier import demote_orphan_internal_transfers, promote_internal_transfers
+from pfa_ir_verifier import (
+    RawRow,
+    demote_orphan_internal_transfers,
+    promote_internal_transfers,
+)
 
 # ---------------------------------------------------------------------------
 # Internal transaction model
@@ -71,10 +75,9 @@ from pfa_analysis.types import (
     Txn,
 )
 
-# The verifier's ``promote_internal_transfers`` takes ``list[dict[str, Any]]``;
-# the row's real value types are a strict subset, so this alias lets us bridge
-# the call without leaking ``Any`` into the analysis types.
-RawRowForVerifier = dict[str, str | float | bool | None | list[str]]
+# ``promote_internal_transfers`` expects ``list[RawRow]``; ``Txn`` is assignable
+# to ``RawRow`` (TypedDict -> dict), so the call sites cast ``list[Txn]``
+# directly to ``list[RawRow]``.
 
 
 # ---------------------------------------------------------------------------
@@ -208,7 +211,7 @@ def _load_consolidated_ir(data: RawIr, path: Path,
                 "link_labels": list(t.get("link_labels", []) or []),
             })
     # Promote candidate self-reference rows only when a valid partner leg exists.
-    promote_internal_transfers(cast(list[RawRowForVerifier], txns), own_digits, amount_key="amount",
+    promote_internal_transfers(cast(list[RawRow], txns), own_digits, amount_key="amount",
                                 desc_key="description", flag_key="is_internal_transfer",
                                 own_liability_digits=own_liability_digits)
     return meta, txns
@@ -1401,7 +1404,7 @@ def _load_ir_with_txn_id(path: Path,
                     "linked_txn_ids": list(txn.get("linked_txn_ids", []) or []),
                 })
         # Promote candidate self-reference rows only when a valid partner leg exists.
-        promote_internal_transfers(cast(list[RawRowForVerifier], rows), own_digits, amount_key="amount",
+        promote_internal_transfers(cast(list[RawRow], rows), own_digits, amount_key="amount",
                                     desc_key="description", flag_key="is_internal_transfer",
                                     own_liability_digits=own_liability_digits)
         if not keep_internal:

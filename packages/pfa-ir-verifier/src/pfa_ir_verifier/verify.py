@@ -82,7 +82,7 @@ class Txn(TypedDict):
 # fixers only read/write a small fixed set of string/number/flag/label keys, so
 # a permissive value type is sufficient and callers need not ``cast`` at every
 # call site.
-RawRow = dict[str, str | float | bool | None | list[str]]
+RawRow = dict[str, str | float | bool | None | list[str] | Decimal]
 
 
 # Any IR input the verifier accepts: a ParsedStatement, a raw IR dict, a flat
