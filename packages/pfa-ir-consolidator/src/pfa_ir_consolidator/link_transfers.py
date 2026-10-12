@@ -25,7 +25,9 @@ These are internal transfers that should be flagged to avoid double-counting in
 net-worth calculations.
 
 Linking rules (all must hold):
-  1. Same ``posted_date``
+  1. Posted dates within a +/-3 day settlement window (inter-bank transfers such
+     as FAST commonly post on the next business day, and across a weekend that can
+     be 2-3 days later, so an exact same-day match is too strict).
   2. Opposite amounts: ``abs(A.amount + B.amount) < 1e-2``
      (not required for currency conversions — amounts differ by exchange rate)
   3. Neither transaction already flagged ``is_internal_transfer``
@@ -57,6 +59,7 @@ transaction). Read-only / warning-only checks use ``find_*`` / ``verify_*`` inst
 from __future__ import annotations
 
 import re
+from datetime import date, datetime
 from typing import cast
 
 # JSONValue lives in the schema submodule but is not re-exported by the
@@ -86,6 +89,19 @@ _TRANSFER_KEYWORD_RE = re.compile(
 def _is_transfer_like(description: str) -> bool:
     """Return True if the description looks like a transfer between accounts."""
     return bool(_TRANSFER_KEYWORD_RE.search(description or ""))
+
+
+def _parse_posted_date(posted_date: str | None) -> "date | None":
+    """Parse a ``YYYY-MM-DD`` posted_date into a ``datetime.date``.
+
+    Returns ``None`` for missing or malformed values so callers can skip them.
+    """
+    if not posted_date:
+        return None
+    try:
+        return datetime.strptime(posted_date, "%Y-%m-%d").date()
+    except (ValueError, TypeError):
+        return None
 
 
 def _record_detection_stat(statement: ParsedStatement, key: str, value: JSONValue) -> None:
@@ -150,73 +166,74 @@ def link_inter_bank_transfers(statement: ParsedStatement) -> ParsedStatement:
         if inst:
             institution_by_account[acct.account_no] = inst
 
-    # Index every transaction by (posted_date, institution) for efficient grouping.
-    # We group by posted_date first, then cross-check across institutions.
-    by_date: dict[str, list[tuple[int, Account, Transaction]]] = {}
+    # Flatten candidate transactions with their parsed posted_date so we can match
+    # across a settlement window. Inter-bank transfers (e.g. FAST) often post on the
+    # next business day, and across a weekend that can be 2-3 days later, so an
+    # exact same-day match would miss them. We therefore allow a +/-3 day window.
+    candidates: list[tuple[int, Account, Transaction, date]] = []
     for ai, acct in enumerate(statement.accounts):
-        for _, txn in enumerate(acct.transactions or []):
-            if not txn.posted_date:
-                continue
+        for txn in acct.transactions or []:
             # Skip already-internal-transfer txns (preserve FD↔CA links).
-            if txn.is_internal_transfer:
+            if not txn.posted_date or txn.is_internal_transfer:
                 continue
-            by_date.setdefault(txn.posted_date, []).append((ai, acct, txn))
+            dt = _parse_posted_date(txn.posted_date)
+            if dt is None:
+                continue
+            candidates.append((ai, acct, txn, dt))
 
     matched_pairs = 0
-    for posted_date, entries in by_date.items():
-        n = len(entries)
-        # Skip dates with only one unfrozen entry — no pairing possible.
-        if n < 2:
+    used: set[int] = set()
+    n = len(candidates)
+    for i in range(n):
+        if i in used:
+            continue
+        _, acct_a, txn_a, dt_a = candidates[i]
+        inst_a = institution_by_account.get(acct_a.account_no, "")
+        if not inst_a:
             continue
 
-        used: set[int] = set()
-
-        for i in range(n):
-            if i in used:
+        for j in range(i + 1, n):
+            if j in used:
                 continue
-            _, acct_a, txn_a = entries[i]
-            inst_a = institution_by_account.get(acct_a.account_no, "")
-            if not inst_a:
+            _, acct_b, txn_b, dt_b = candidates[j]
+            inst_b = institution_by_account.get(acct_b.account_no, "")
+
+            # Must be different institutions.
+            if not inst_b or inst_a == inst_b:
                 continue
 
-            for j in range(i + 1, n):
-                if j in used:
-                    continue
-                _, acct_b, txn_b = entries[j]
-                inst_b = institution_by_account.get(acct_b.account_no, "")
+            # Allow a +/-3 day settlement window (weekends / holidays).
+            if abs((dt_a - dt_b).days) > 3:
+                continue
 
-                # Must be different institutions.
-                if not inst_b or inst_a == inst_b:
-                    continue
+            # Must be opposite amounts (within tolerance).
+            if abs(txn_a.amount + txn_b.amount) > 1e-2:
+                continue
 
-                # Must be opposite amounts (within tolerance).
-                if abs(txn_a.amount + txn_b.amount) > 1e-2:
-                    continue
+            # Both sides must look like transfers. A bare merchant charge
+            # (e.g. "LAUNDRY") paired with an unrelated same-day credit is
+            # not an internal transfer.
+            if not _is_transfer_like(txn_a.description) or not _is_transfer_like(txn_b.description):
+                continue
 
-                # Both sides must look like transfers. A bare merchant charge
-                # (e.g. "LAUNDRY") paired with an unrelated same-day credit is
-                # not an internal transfer.
-                if not _is_transfer_like(txn_a.description) or not _is_transfer_like(txn_b.description):
-                    continue
+            # Match found — cross-link.
+            used.add(i)
+            used.add(j)
 
-                # Match found — cross-link.
-                used.add(i)
-                used.add(j)
+            _cross_link(txn_a, txn_b)
+            matched_pairs += 1
 
-                _cross_link(txn_a, txn_b)
-                matched_pairs += 1
-
-                # Emit warning.
-                warn = (
-                    f"Inter-bank transfer detected: {txn_a.txn_id!r} "
-                    f"({_acct_type_abbr(acct_a.account_type)} {acct_a.account_no}, {inst_a}) → "
-                    f"{txn_b.txn_id!r} "
-                    f"({_acct_type_abbr(acct_b.account_type)} {acct_b.account_no}, {inst_b}), "
-                    f"amount {abs(txn_a.amount):,.2f}, date {posted_date}"
-                )
-                if warn not in statement.warnings:
-                    statement.warnings.append(warn)
-                break  # One match per txn_a; move to next txn_a.
+            # Emit warning.
+            warn = (
+                f"Inter-bank transfer detected: {txn_a.txn_id!r} "
+                f"({_acct_type_abbr(acct_a.account_type)} {acct_a.account_no}, {inst_a}) → "
+                f"{txn_b.txn_id!r} "
+                f"({_acct_type_abbr(acct_b.account_type)} {acct_b.account_no}, {inst_b}), "
+                f"amount {abs(txn_a.amount):,.2f}, dates {txn_a.posted_date} / {txn_b.posted_date}"
+            )
+            if warn not in statement.warnings:
+                statement.warnings.append(warn)
+            break  # One match per txn_a; move to next txn_a.
 
     # Record detection stats in extras.
     _record_detection_stat(statement, "inter_bank_detected", matched_pairs)
@@ -290,72 +307,73 @@ def link_intra_bank_transfers(statement: ParsedStatement) -> ParsedStatement:
         if inst:
             institution_by_account[acct.account_no] = inst
 
-    # Index every non-frozen transaction from current accounts by (posted_date, institution).
-    by_date: dict[str, list[tuple[int, Account, Transaction]]] = {}
+    # Flatten candidate transactions (current accounts only) with parsed dates so
+    # we can match across a settlement window. Same-institution transfers can also
+    # post a few days apart over a weekend, hence the +/-3 day tolerance.
+    candidates: list[tuple[int, Account, Transaction, date]] = []
     for ai, acct in enumerate(statement.accounts):
         if acct.account_type != "current":
             continue
-        for _, txn in enumerate(acct.transactions or []):
-            if not txn.posted_date:
+        for txn in acct.transactions or []:
+            if not txn.posted_date or txn.is_internal_transfer:
                 continue
-            if txn.is_internal_transfer:
+            dt = _parse_posted_date(txn.posted_date)
+            if dt is None:
                 continue
-            by_date.setdefault(txn.posted_date, []).append((ai, acct, txn))
+            candidates.append((ai, acct, txn, dt))
 
     matched_pairs = 0
-    for posted_date, entries in by_date.items():
-        n = len(entries)
-        if n < 2:
+    used: set[int] = set()
+    n = len(candidates)
+    for i in range(n):
+        if i in used:
+            continue
+        _, acct_a, txn_a, dt_a = candidates[i]
+        inst_a = institution_by_account.get(acct_a.account_no, "")
+        if not inst_a:
             continue
 
-        used: set[int] = set()
-
-        for i in range(n):
-            if i in used:
+        for j in range(i + 1, n):
+            if j in used:
                 continue
-            _, acct_a, txn_a = entries[i]
-            inst_a = institution_by_account.get(acct_a.account_no, "")
-            if not inst_a:
+            _, acct_b, txn_b, dt_b = candidates[j]
+            inst_b = institution_by_account.get(acct_b.account_no, "")
+
+            # Must be the SAME institution (intra-bank).
+            if not inst_b or inst_a != inst_b:
+                continue
+            # Must be DIFFERENT accounts.
+            if acct_a.account_no == acct_b.account_no:
+                continue
+            # Allow a +/-3 day settlement window (weekends / holidays).
+            if abs((dt_a - dt_b).days) > 3:
+                continue
+            # Must be opposite amounts (within tolerance).
+            if abs(txn_a.amount + txn_b.amount) > 1e-2:
                 continue
 
-            for j in range(i + 1, n):
-                if j in used:
-                    continue
-                _, acct_b, txn_b = entries[j]
-                inst_b = institution_by_account.get(acct_b.account_no, "")
+            # Both sides must look like transfers (same rationale as the
+            # inter-bank pass: avoid linking unrelated same-day charges).
+            if not _is_transfer_like(txn_a.description) or not _is_transfer_like(txn_b.description):
+                continue
 
-                # Must be the SAME institution (intra-bank).
-                if not inst_b or inst_a != inst_b:
-                    continue
-                # Must be DIFFERENT accounts.
-                if acct_a.account_no == acct_b.account_no:
-                    continue
-                # Must be opposite amounts (within tolerance).
-                if abs(txn_a.amount + txn_b.amount) > 1e-2:
-                    continue
+            # Match found — cross-link.
+            used.add(i)
+            used.add(j)
 
-                # Both sides must look like transfers (same rationale as the
-                # inter-bank pass: avoid linking unrelated same-day charges).
-                if not _is_transfer_like(txn_a.description) or not _is_transfer_like(txn_b.description):
-                    continue
+            _cross_link(txn_a, txn_b, labels=(REL_INTRA_BANK,))
+            matched_pairs += 1
 
-                # Match found — cross-link.
-                used.add(i)
-                used.add(j)
-
-                _cross_link(txn_a, txn_b, labels=(REL_INTRA_BANK,))
-                matched_pairs += 1
-
-                warn = (
-                    f"Intra-bank transfer detected: {txn_a.txn_id!r} "
-                    f"({_acct_type_abbr(acct_a.account_type)} {acct_a.account_no}, {inst_a}) → "
-                    f"{txn_b.txn_id!r} "
-                    f"({_acct_type_abbr(acct_b.account_type)} {acct_b.account_no}, {inst_b}), "
-                    f"amount {abs(txn_a.amount):,.2f}, date {posted_date}"
-                )
-                if warn not in statement.warnings:
-                    statement.warnings.append(warn)
-                break  # One match per txn_a; move to next txn_a.
+            warn = (
+                f"Intra-bank transfer detected: {txn_a.txn_id!r} "
+                f"({_acct_type_abbr(acct_a.account_type)} {acct_a.account_no}, {inst_a}) → "
+                f"{txn_b.txn_id!r} "
+                f"({_acct_type_abbr(acct_b.account_type)} {acct_b.account_no}, {inst_b}), "
+                f"amount {abs(txn_a.amount):,.2f}, dates {txn_a.posted_date} / {txn_b.posted_date}"
+            )
+            if warn not in statement.warnings:
+                statement.warnings.append(warn)
+            break  # One match per txn_a; move to next txn_a.
 
     # Record detection stats in extras.
     _record_detection_stat(statement, "intra_bank_detected", matched_pairs)
