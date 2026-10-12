@@ -357,7 +357,6 @@ def render_report(result: AnalysisResult, consolidated: bool = False,
     out.append(" | ".join(sep_parts) + " |")
 
     # Data rows.
-    tot_inv = 0.0
     for label, by_ccy, _mult, is_lia in rows:
         vals: list[str] = [label]
         row_sgd = 0.0
@@ -375,8 +374,6 @@ def render_report(result: AnalysisResult, consolidated: bool = False,
             if use_fx and not is_lia or use_fx and is_lia:
                 s = convert_to_sgd(v, c, fx_rates) or 0.0
                 row_sgd += s
-        if label == "Investments":
-            tot_inv = row_native
         if use_fx:
             vals.append(fmt(row_sgd))
         out.append(" | ".join(vals) + " |")
@@ -781,31 +778,10 @@ def render_report(result: AnalysisResult, consolidated: bool = False,
                 )
                 out.append(f"_By received currency — {detail}_\n")
 
-    # ---- 4. Key Observations -------------------------------------------------
-    out.append("## 4. Key Observations\n")
-    if not mbc:
-        out.append("- Balance-sheet only statement: review asset allocation (cash vs investments).\n")
-    for ccy in sorted(mbc):
-        m = mbc[ccy]
-        if m["net_operating"] <= 0:
-            out.append(f"- **{ccy}:** operating funds flow non-positive \u2014 income did not cover spending.\n")
-        elif m["savings_rate"] >= 0.30:
-            out.append(f"- **{ccy}:** strong retained funds flow (\u226530%).\n")
-        if m["reconciliation_ok"] is False:
-            out.append(
-                f"- **{ccy}:** balance/funds-flow gap \u2014 money likely moved to/from an "
-                + "account not in this statement (external transfer).\n"
-            )
-        if m["transfer_out"] > 0:
-            out.append(f"- **{ccy}:** transfers out {fmt(m['transfer_out'])} (excluded from operating CF).\n")
-    if tot_inv > 0 and (use_fx or len(ccies) <= 1):
-        out.append(f"- Investments total {fmt(tot_inv)} \u2014 part of net worth, not cash-flow liquid.\n")
-    out.append("")
-
     # ---- 5. FX Rates Reference -----------------------------------------------
     if use_fx:
         assert fx_rates is not None  # guaranteed by use_fx
-        out.append("## 5. FX Rates Reference\n")
+        out.append("## 4. FX Rates Reference\n")
         out.append(
             "All non-SGD balances above are converted at the statement-period-end rate "
             + f"(**{fx_rates['date']}**) sourced from **{fx_rates['source']}** "
@@ -825,7 +801,7 @@ def render_report(result: AnalysisResult, consolidated: bool = False,
         out.append("")
 
     # ---- 6. Notes & Caveats --------------------------------------------------
-    out.append("## " + ("6" if use_fx else "5") + ". Notes & Caveats\n")
+    out.append("## " + ("5" if use_fx else "4") + ". Notes & Caveats\n")
     out.append(
         "- Internal Transfers (own-account / fixed-deposit moves) are separated from Income/Expense. "
         + "Detection uses `is_internal_transfer`.\n"

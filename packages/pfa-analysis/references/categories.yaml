@@ -77,7 +77,7 @@ rules:
       - FIXED DEPOSIT
       - FDWD
       - TIME DEPO AUTO ROLLOVER
-      - TIME DEPO
+      - TIME DEPOSIT
 
   # -------------------------------------------------------------------------
   # 1.4 Income: Salary

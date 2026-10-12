@@ -77,11 +77,11 @@ class Txn(TypedDict):
 
 
 # A loose flat transaction row as passed by callers. ``pfa-analysis``'s
-# ``RawRowForVerifier`` and ``pfa-ir-consolidator``'s ``_PromoteRow`` are both
-# structurally this shape (the inferred element type of their row lists). The
-# fixers only read/write a small fixed set of string/number/flag/label keys, so
-# a permissive value type is sufficient and callers need not ``cast`` at every
-# call site.
+# ``Txn`` (``TxnRow``) TypedDict and ``pfa-ir-consolidator``'s ``_PromoteRow``
+# are both structurally this shape (the inferred element type of their row
+# lists). The fixers only read/write a small fixed set of string/number/flag/
+# label keys, so a permissive value type is sufficient and callers need not
+# ``cast`` at every call site.
 RawRow = dict[str, str | float | bool | None | list[str] | Decimal]
 
 
