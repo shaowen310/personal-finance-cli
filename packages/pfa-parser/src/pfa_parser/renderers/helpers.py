@@ -2,7 +2,6 @@
 
 Provides:
 - ``md_masked_description()`` — masking wrapper applied at render time
-- ``fmt()`` — empty-value formatter
 """
 
 from __future__ import annotations
@@ -22,8 +21,3 @@ def md_masked_description(description: str, *, do_mask: bool = True) -> str:
         desc = mask_names_in_description(desc)
         return desc
     return description
-
-
-def fmt(val: object) -> str:
-    """Return ``"—"`` for empty/falsy values, else ``str(val)``."""
-    return str(val) if val else "—"

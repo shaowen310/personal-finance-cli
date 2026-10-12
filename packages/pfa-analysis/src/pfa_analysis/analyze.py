@@ -813,23 +813,6 @@ def _analyze_consolidated(raw: RawIr, meta: Meta,
 # ---------------------------------------------------------------------------
 
 from pfa_analysis.categorize import UNCATEGORIZED, _split_cat
-from pfa_analysis.render_md import fmt, render_report
-
-# Per-file processing helper
-# ---------------------------------------------------------------------------
-
-def process_one_file(path: Path, out_dir: Path) -> AnalysisResult:
-    result = _analyze_file(path)
-    text = render_report(result)
-    out_path = out_dir / (path.stem + "_Finance_Report.md")
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    _ = out_path.write_text(text, encoding="utf-8")
-    print(f"Written: {out_path}")
-    np_ = (sum(result["assets"]["cash"].values()) + sum(result["assets"]["time_deposits"].values())
-           + sum(result["assets"]["investments"].values()))
-    print(f"  net_position={fmt(np_)}  currencies={sorted(result['metrics_by_ccy'])}")
-    return result
-
 
 def build_income_expense_drilldowns(
     consolidated_path: Path,
@@ -989,20 +972,6 @@ def build_income_expense_drilldowns(
         })
 
     return income_drill, expense_drill
-
-
-def _internal_transfer_ids(
-    consolidated_path: Path,
-    start_date: str | None = None,
-    end_date: str | None = None,
-) -> list[str]:
-    """Return txn_ids of internal transfers in the consolidated IR (date-filtered)."""
-    try:
-        _, ir_rows = _load_ir_with_txn_id(consolidated_path, start_date, end_date,
-                                          keep_internal=True)
-    except Exception:  # noqa: BLE001 -- degrade to an empty internal-transfer id list
-        return []
-    return [r.get("txn_id", "") for r in ir_rows if r.get("is_internal_transfer")]
 
 
 def _group_linked_adjacent(txns: list[DrilldownTxn]) -> list[DrilldownTxn]:
