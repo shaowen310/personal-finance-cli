@@ -50,6 +50,7 @@ import re
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from decimal import Decimal
 from pathlib import Path
 from typing import TypedDict, cast
 
@@ -497,13 +498,13 @@ def promote_internal_transfers(
 
 
 def _fd_interest_mismatch(
-    principal: float,
+    principal: Decimal,
     interest_rate: str | float | None,
     value_date: str | None,
     maturity_date: str | None,
-    interest_amount: float | None,
+    interest_amount: Decimal | None,
     *,
-    tol: float = 0.01,
+    tol: Decimal = Decimal("0.01"),
     institution: str | None = None,
     day_count: int | None = None,
 ) -> str | None:
@@ -520,10 +521,11 @@ def _fd_interest_mismatch(
     """
     if interest_amount is None:
         return None
-    if isinstance(interest_rate, (int, float)):
-        rate = float(interest_rate)
+    if isinstance(interest_rate, (int, float, Decimal)):
+        rate = Decimal(str(interest_rate))
     else:
-        rate = parse_fd_rate(interest_rate)
+        parsed = parse_fd_rate(interest_rate)
+        rate = None if parsed is None else Decimal(str(parsed))
     if rate is None:
         return None
     vd = _parse_fd_date(value_date)
@@ -531,7 +533,7 @@ def _fd_interest_mismatch(
     if vd is None or mat is None or mat <= vd:
         return None
     basis = day_count if (isinstance(day_count, int) and day_count > 0) else _fd_day_count(institution)
-    period_years = (mat - vd).days / basis
+    period_years = Decimal((mat - vd).days) / Decimal(basis)
     expected = principal * rate * period_years
     if abs(interest_amount - expected) > tol:
         return (
@@ -655,7 +657,7 @@ def verify_account_balances(statement: ParsedStatement) -> ParsedStatement:
             # Verify closing_balance against last txn's balance_after
             last_ba = sorted_txns[-1].balance_after
             if last_ba is not None and acct.closing_balance is not None:
-                if abs(float(acct.closing_balance) - last_ba) > 1e-6:
+                if abs(acct.closing_balance - last_ba) > Decimal("1E-6"):
                     warn = (
                         f"closing_balance mismatch for account '{acct.name}' "
                         f"({acct.account_no}, {acct.currency or '?'}): "
@@ -675,9 +677,9 @@ def verify_account_balances(statement: ParsedStatement) -> ParsedStatement:
                 and acct.opening_balance is not None
                 and acct.closing_balance is not None
             ):
-                total_amount = sum(float(t.amount or 0.0) for t in sorted_txns)
-                expected_closing = float(acct.opening_balance) + total_amount
-                if abs(float(acct.closing_balance) - expected_closing) > 1e-6:
+                total_amount = sum((t.amount or Decimal(0)) for t in sorted_txns)
+                expected_closing = acct.opening_balance + total_amount
+                if abs(acct.closing_balance - expected_closing) > Decimal("1E-6"):
                     warn = (
                         f"closing_balance mismatch for account '{acct.name}' "
                         f"({acct.account_no}, {acct.currency or '?'}): "
@@ -691,7 +693,7 @@ def verify_account_balances(statement: ParsedStatement) -> ParsedStatement:
         else:
             # No transactions: opening should equal closing
             if acct.opening_balance is not None and acct.closing_balance is not None:
-                if abs(float(acct.opening_balance) - float(acct.closing_balance)) > 1e-6:
+                if abs(acct.opening_balance - acct.closing_balance) > Decimal("1E-6"):
                     warn = (
                         f"closing_balance mismatch for account '{acct.name}' "
                         f"({acct.account_no}, {acct.currency or '?'}): "

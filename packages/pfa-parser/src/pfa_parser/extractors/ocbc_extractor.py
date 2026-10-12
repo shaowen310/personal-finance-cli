@@ -8,6 +8,7 @@ from __future__ import annotations
 from collections import OrderedDict
 from datetime import datetime
 from pathlib import Path
+from decimal import Decimal
 from typing import TYPE_CHECKING, Any, ClassVar, cast, override
 
 from pfa_ir_schema import AccountType, ParsedStatement
@@ -88,10 +89,10 @@ class OCBCConsolidatedExtractor(BaseExtractor):
         for (acct_no, acct_name), txns in accounts_map.items():
             # Derive closing_balance from the last transaction's balance_after
             # column (the parser extracts it from the statement's "Balance" col).
-            closing_balance: float | None = None
+            closing_balance: Decimal | None = None
             last_balance_str = str(txns[-1].get("balance", "") or "").replace(",", "") if txns else ""
             if last_balance_str:
-                closing_balance = float(last_balance_str)
+                closing_balance = Decimal(last_balance_str)
 
             _ = builder.add_account(
                 name=acct_name,
@@ -101,12 +102,12 @@ class OCBCConsolidatedExtractor(BaseExtractor):
                 closing_balance=closing_balance,
             )
             for t in txns:
-                withdrawal = float(str(t.get("withdrawal", "0") or "0").replace(",", ""))
-                deposit = float(str(t.get("deposit", "0") or "0").replace(",", ""))
+                withdrawal = Decimal(str(t.get("withdrawal", "0") or "0").replace(",", ""))
+                deposit = Decimal(str(t.get("deposit", "0") or "0").replace(",", ""))
                 amount = deposit - withdrawal
 
                 balance_str = str(t.get("balance", "") or "").replace(",", "")
-                balance = float(balance_str) if balance_str else None
+                balance = Decimal(balance_str) if balance_str else None
 
                 _ = builder.add_transaction(
                     posted_date=str(t.get("txn_date", "")),
@@ -126,10 +127,10 @@ class OCBCConsolidatedExtractor(BaseExtractor):
                 fd_by_no.setdefault(str(td.get("account_no", "")), []).append(td)
 
             for acct_no, tds in fd_by_no.items():
-                records: list[tuple[TimeDeposit, float, str | None, bool]] = []
-                closing_balance = 0.0
+                records: list[tuple[TimeDeposit, Decimal, str | None, bool]] = []
+                closing_balance = Decimal(0)
                 for td in tds:
-                    bal = float(str(td.get("balance", "0")).replace(",", ""))
+                    bal = Decimal(str(td.get("balance", "0")).replace(",", ""))
                     maturity_iso = _ocbc_maturity_to_iso(str(td.get("maturity", "")))
                     # A fixed deposit is active if it has not yet matured as of the
                     # statement end date. Treat as active when the maturity date or
@@ -206,13 +207,13 @@ class OCRCCardExtractor(BaseExtractor):
 
         # Credit card opening balance = last month's balance from the PDF;
         # closing balance = total amount due.
-        def _parse_float(val: str) -> float | None:
+        def _parse_float(val: str) -> Decimal | None:
             s = str(val).replace(",", "").strip()
             if not s:
                 return None
             try:
-                return float(s)
-            except ValueError:
+                return Decimal(s)
+            except (ValueError, InvalidOperation):
                 return None
 
         opening = _parse_float(meta.get("last_month_balance", ""))
@@ -241,7 +242,7 @@ class OCRCCardExtractor(BaseExtractor):
             amount_signed = t.get("amount_signed")
             if amount_signed is None:
                 continue
-            sgd_amount = float(amount_signed)
+            sgd_amount = Decimal(str(amount_signed))
 
             # Store foreign-currency details in extras for reference.
             extras: dict[str, Any] = {}
@@ -251,7 +252,7 @@ class OCRCCardExtractor(BaseExtractor):
             if fc_str:
                 parts = fc_str.split(" ", 1)
                 if len(parts) == 2 and len(parts[0]) == 3 and parts[0].isalpha() and parts[0].isupper():
-                    fc_amount = float(parts[1].replace(",", ""))
+                    fc_amount = Decimal(parts[1].replace(",", ""))
                     if fc_amount != 0:
                         extras["foreign_currency"] = parts[0]
                         extras["foreign_amount"] = fc_amount

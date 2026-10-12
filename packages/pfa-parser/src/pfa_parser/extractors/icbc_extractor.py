@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from pathlib import Path
+from decimal import Decimal, InvalidOperation
 from typing import ClassVar, override
 
 from pfa_ir_schema import AccountType, ParsedStatement
@@ -87,7 +88,7 @@ class ICBCExtractor(BaseExtractor):
             opening_balance = None
             if bf_txn is not None:
                 bf_bal = str(bf_txn.get("balance", "") or "").replace(",", "")
-                opening_balance = float(bf_bal) if bf_bal else None
+                opening_balance = Decimal(bf_bal) if bf_bal else None
             _ = builder.add_account(
                 name=str(row.get("acct_type", "Current Account")),
                 account_no=acct_no,
@@ -102,13 +103,13 @@ class ICBCExtractor(BaseExtractor):
                 # them double-counts the credits/debits.
                 if t.get("is_total"):
                     continue
-                withdrawal = float(str(t.get("withdrawal", "0") or "0").replace(",", ""))
-                deposit = float(str(t.get("deposit", "0") or "0").replace(",", ""))
+                withdrawal = Decimal(str(t.get("withdrawal", "0") or "0").replace(",", ""))
+                deposit = Decimal(str(t.get("deposit", "0") or "0").replace(",", ""))
                 amount = deposit - withdrawal
                 ccy = str(t.get("ccy", "SGD"))
 
                 balance_str = str(t.get("balance", "") or "").replace(",", "")
-                balance = float(balance_str) if balance_str else None
+                balance = Decimal(balance_str) if balance_str else None
 
                 _ = builder.add_transaction(
                     posted_date=_icbc_date_to_iso(str(t.get("date", ""))),
@@ -140,7 +141,7 @@ class ICBCExtractor(BaseExtractor):
                            .replace(",", "")
                            .replace("\uFF0D", "-")
                            .replace("\u2212", "-"))
-                signed_amount = float(amt_str) if amt_str else 0.0
+                signed_amount = Decimal(amt_str) if amt_str else Decimal(0)
                 principal = abs(signed_amount)
                 ccy = str(t.get("ccy", "SGD"))
 
@@ -185,19 +186,21 @@ def _icbc_date_to_iso(date_str: str) -> str:
     return date_str
 
 
-def _icbc_parse_balance(val: object) -> float | None:
-    """Parse ICBC balance/amount value to float.
+def _icbc_parse_balance(val: object) -> Decimal | None:
+    """Parse ICBC balance/amount value to Decimal.
 
     Handles comma grouping and ICBC's full-width minus (U+FF0D) / minus sign
     (U+2212) which appear on withdrawal rows.
     """
     if val is None:
         return None
-    if isinstance(val, (int, float)):
-        return float(val)
+    if isinstance(val, (int, Decimal)):
+        return Decimal(val)
+    if isinstance(val, float):
+        return Decimal(val)
     try:
         s = str(val).replace(",", "").strip()
         s = s.replace("\uFF0D", "-").replace("\u2212", "-")
-        return float(s) if s else None
-    except (ValueError, TypeError):
+        return Decimal(s) if s else None
+    except (ValueError, TypeError, InvalidOperation):
         return None

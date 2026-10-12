@@ -16,6 +16,7 @@ OCBC extractor (``ocbc_extractor.py``) and rendered to Markdown by
 from __future__ import annotations
 
 import re
+from decimal import Decimal
 from datetime import datetime
 from typing import TypedDict
 
@@ -71,7 +72,7 @@ class CardTxnBase(TypedDict):
     date: str
     description: str
     amount_display: str
-    amount_signed: float | None
+    amount_signed: Decimal | None
     foreign_currency: str
 
 
@@ -112,11 +113,11 @@ def is_card_num(s: str) -> bool:
     return bool(NUM_CARD_RE.match(s.strip()))
 
 
-def parse_card_amount(s: str) -> float:
-    """Return signed float. Parenthesized => negative (credit)."""
+def parse_card_amount(s: str) -> Decimal:
+    """Return signed Decimal. Parenthesized => negative (credit)."""
     s = s.strip()
     neg = s.startswith("(") and s.endswith(")")
-    val = float(s.strip("()").replace(",", ""))
+    val = Decimal(s.strip("()").replace(",", ""))
     return -val if neg else val
 
 

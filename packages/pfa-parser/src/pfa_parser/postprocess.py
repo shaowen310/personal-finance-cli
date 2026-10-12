@@ -9,6 +9,7 @@ auditable, and the renderers can stay dumb (read ``t.balance_after`` directly).
 from __future__ import annotations
 
 import re
+from decimal import Decimal
 from typing import cast
 
 from pfa_ir_schema import (
@@ -73,18 +74,18 @@ def fill_fd_running_balances(statement: ParsedStatement) -> ParsedStatement:
 
         earliest = min((t.posted_date for t in txns if t.posted_date), default=None)
         if acct.opening_balance is not None:
-            opening = float(acct.opening_balance)
+            opening = acct.opening_balance
         else:
-            opening = 0.0
+            opening = Decimal(0)
             for r in (acct.fd_records or []):
                 vd = r.value_date
                 if vd and earliest and vd < earliest:
-                    opening += float(r.principal or 0.0)
+                    opening += (r.principal or Decimal(0))
             acct.opening_balance = opening
 
         bal = opening
         for t in txns:
-            amt = float(t.amount or 0.0)
+            amt = t.amount or Decimal(0)
             bal += amt
             t.balance_after = bal
 
@@ -172,7 +173,7 @@ def link_fd_to_ca(statement: ParsedStatement) -> ParsedStatement:
             # into ``interest_amount`` (with amount 0) — adding ``interest_amount``
             # keeps both cases correct.
             total_mag = sum(
-                abs(t.amount) + (t.interest_amount or 0.0) for t in fd_legs
+                abs(t.amount) + (t.interest_amount or Decimal(0)) for t in fd_legs
             )
             if total_mag <= 0:
                 continue
@@ -185,13 +186,13 @@ def link_fd_to_ca(statement: ParsedStatement) -> ParsedStatement:
             consumed: set[int] = set()
             leg_ca: dict[str, Transaction] = {}
             for fl in fd_legs:
-                leg_mag = abs(fl.amount) + (fl.interest_amount or 0.0)
+                leg_mag = abs(fl.amount) + (fl.interest_amount or Decimal(0))
                 if leg_mag <= 0:
                     continue
                 for idx, ca_txn in enumerate(funding_txns):
                     if idx in consumed or ca_txn.posted_date != posted_date:
                         continue
-                    if abs(ca_txn.amount - leg_mag) > 1e-6 and abs(ca_txn.amount + leg_mag) > 1e-6:
+                    if abs(ca_txn.amount - leg_mag) > Decimal("1E-6") and abs(ca_txn.amount + leg_mag) > Decimal("1E-6"):
                         continue
                     consumed.add(idx)
                     leg_ca[fl.txn_id] = ca_txn
@@ -213,7 +214,7 @@ def link_fd_to_ca(statement: ParsedStatement) -> ParsedStatement:
             for ca_txn in funding_txns:
                 if ca_txn.posted_date != posted_date:
                     continue
-                if abs(ca_txn.amount - total_mag) > 1e-6 and abs(ca_txn.amount + total_mag) > 1e-6:
+                if abs(ca_txn.amount - total_mag) > Decimal("1E-6") and abs(ca_txn.amount + total_mag) > Decimal("1E-6"):
                     continue
                 combined = ca_txn
                 break
@@ -312,13 +313,13 @@ def _synthesize_ca_twin(
     if funding_acct is None:
         return None
 
-    is_closure = (fd_leg.amount or 0.0) < 0
-    principal = abs(fd_leg.amount or 0.0)
-    interest = abs(fd_leg.interest_amount or 0.0) if is_closure else 0.0
-    sign = 1.0 if is_closure else -1.0
+    is_closure = (fd_leg.amount or Decimal(0)) < 0
+    principal = abs(fd_leg.amount or Decimal(0))
+    interest = abs(fd_leg.interest_amount or Decimal(0)) if is_closure else Decimal(0)
+    sign = Decimal(1) if is_closure else Decimal(-1)
     desc = fd_leg.description or ""
 
-    def _make_ca(label: str, amt: float, *, is_internal_transfer: bool) -> Transaction:
+    def _make_ca(label: str, amt: Decimal, *, is_internal_transfer: bool) -> Transaction:
         desc_with_label = f"Synthetic: {desc} [{label}]"
         return Transaction(
             txn_id=generate_txn_id(
@@ -377,25 +378,25 @@ def _split_ca_combined_labels(
                 continue
 
             # Sum interest from linked FD legs to compute the split point.
-            total_interest = 0.0
+            total_interest = Decimal(0)
             for fd_id in ca_txn.linked_txn_ids or []:
                 for fd_acct2 in fd_accounts:
                     for fd_txn in fd_acct2.transactions or []:
                         if fd_txn.txn_id == fd_id:
-                            total_interest += abs(fd_txn.interest_amount or 0.0)
+                            total_interest += abs(fd_txn.interest_amount or Decimal(0))
                             break
 
             # Nothing to split, or the CA row is entirely interest — strip
             # the stray fd_principal label that _link_fd_ca copied down from
             # a combined FD leg.
-            if total_interest <= 0 or abs(total_interest) >= abs(ca_txn.amount or 0.0) - 1e-6:
-                if abs(total_interest) >= abs(ca_txn.amount or 0.0) - 1e-6 and total_interest > 0:
+            if total_interest <= 0 or abs(total_interest) >= abs(ca_txn.amount or Decimal(0)) - Decimal("1E-6"):
+                if abs(total_interest) >= abs(ca_txn.amount or Decimal(0)) - Decimal("1E-6") and total_interest > 0:
                     ca_txn.link_labels = [l for l in labels if l != REL_FD_PRINCIPAL]
                 new_txns.append(ca_txn)
                 continue
 
-            ca_amt = float(ca_txn.amount or 0.0)
-            sign = 1.0 if ca_amt >= 0 else -1.0
+            ca_amt = ca_txn.amount or Decimal(0)
+            sign = Decimal(1) if ca_amt >= 0 else Decimal(-1)
 
             # Build per-label FD-leg-ID sets so each split CA row only
             # links to FD legs that carry the matching label.
@@ -493,7 +494,7 @@ def fill_account_balances(statement: ParsedStatement) -> ParsedStatement:
 
         if txns:
             sorted_txns = sorted(txns, key=lambda t: t.posted_date or "")
-            total_amount = sum(float(t.amount or 0.0) for t in sorted_txns)
+            total_amount = sum((t.amount or Decimal(0)) for t in sorted_txns)
 
             # Fill closing_balance from last txn's balance_after if missing
             if acct.closing_balance is None:
@@ -503,7 +504,7 @@ def fill_account_balances(statement: ParsedStatement) -> ParsedStatement:
 
             # Derive opening_balance from closing_balance if missing
             if acct.opening_balance is None and acct.closing_balance is not None:
-                derived_opening = float(acct.closing_balance) - total_amount
+                derived_opening = acct.closing_balance - total_amount
                 acct.opening_balance = derived_opening
                 warn = (
                     f"opening_balance for account '{acct.name}' "
@@ -539,9 +540,9 @@ def fill_cc_running_balances(statement: ParsedStatement) -> ParsedStatement:
         if atype not in _CREDIT_CARD_TYPES:
             continue
         txns = sorted(acct.transactions, key=lambda t: t.posted_date or "")
-        running = acct.opening_balance or 0.0
+        running = acct.opening_balance or Decimal(0)
         for txn in txns:
-            amt = txn.amount or 0.0
+            amt = txn.amount or Decimal(0)
             running += amt
             txn.balance_after = running
     return statement

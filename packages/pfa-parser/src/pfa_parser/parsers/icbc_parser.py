@@ -11,6 +11,7 @@ Exports:
 from __future__ import annotations
 
 import re
+from decimal import Decimal, InvalidOperation
 from typing import TypedDict
 
 from pfa_ir_schema.common import PDF, is_bank_num
@@ -318,7 +319,7 @@ def _parse_transaction_sections(
     # Track previous CA balance so a single-amount row whose running
     # balance DECREASES can be inferred as a withdrawal (ICBC sometimes
     # drops the withdrawal column on extraction).
-    prev_balance: float | None = None
+    prev_balance: Decimal | None = None
 
     fd_header_seen = False
 
@@ -375,8 +376,8 @@ def _parse_transaction_sections(
                     bal = txn.get("balance", "")
                     if bal:
                         try:
-                            prev_balance = float(str(bal).replace(",", ""))
-                        except ValueError:
+                            prev_balance = Decimal(str(bal).replace(",", ""))
+                        except (ValueError, InvalidOperation):
                             pass
                 pending_remark_parts = []
 
@@ -479,7 +480,7 @@ def _parse_ca_txn_line(
     raw: str,
     acct_no: str,
     pending_remark_parts: list[str],
-    prev_balance: float | None = None,
+    prev_balance: Decimal | None = None,
 ) -> CATxnRow | None:
     """Parse a single Current Account transaction data line.
 
@@ -548,12 +549,12 @@ def _parse_ca_txn_line(
         balance = amounts[-1]
         amount_str = amounts[0].strip().lstrip("+").lstrip("-")
         try:
-            amt_val = round(float(amount_str.replace(",", "")), 2)
-            bal_val = round(float(balance.replace(",", "")), 2)
-            prev = round(prev_balance, 2) if prev_balance is not None else None
-            decreased = prev is not None and round(bal_val + amt_val, 2) == prev
-            increased = prev is not None and round(bal_val - amt_val, 2) == prev
-        except ValueError:
+            amt_val = Decimal(amount_str.replace(",", "")).quantize(Decimal("0.01"))
+            bal_val = Decimal(balance.replace(",", "")).quantize(Decimal("0.01"))
+            prev = prev_balance.quantize(Decimal("0.01")) if prev_balance is not None else None
+            decreased = prev is not None and (bal_val + amt_val) == prev
+            increased = prev is not None and (bal_val - amt_val) == prev
+        except (ValueError, InvalidOperation):
             decreased = increased = False
         if decreased:
             withdrawal = amount_str

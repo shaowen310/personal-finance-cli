@@ -7,6 +7,7 @@ Wraps ``uob_parser.parse_uob_txn()``, ``parse_uob_one()``, and
 from __future__ import annotations
 
 from pathlib import Path
+from decimal import Decimal, InvalidOperation
 from typing import Any, ClassVar, cast, override
 
 from pfa_ir_schema import AccountType, InvestmentHolding, ParsedStatement
@@ -305,16 +306,16 @@ class UOBPortfolioExtractor(BaseExtractor):
 
 # ---- helpers ----
 
-def _parse_amount(val: str | float | None) -> float | None:
-    """Parse a numeric string (possibly with commas) to float."""
+def _parse_amount(val: str | float | Decimal | None) -> Decimal | None:
+    """Parse a numeric string (possibly with commas) to Decimal."""
     if val is None:
         return None
-    if isinstance(val, (int, float)):
-        return float(val)
+    if isinstance(val, (int, float, Decimal)):
+        return Decimal(val)
     val = str(val).strip().replace(",", "")
     if val == "" or val == "—":
         return None
     try:
-        return float(val)
-    except ValueError:
+        return Decimal(val)
+    except (ValueError, InvalidOperation):
         return None

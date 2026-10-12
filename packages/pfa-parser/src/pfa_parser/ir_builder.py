@@ -36,6 +36,7 @@ from __future__ import annotations
 import os
 from datetime import datetime, timezone
 from typing import Any
+from decimal import Decimal
 
 from pfa_ir_schema import (
     Account,
@@ -56,8 +57,8 @@ from pfa_ir_schema import (
 )
 
 
-def _fd_records_complementary(existing: FixedDepositRecord, new_principal: float,
-                              new_interest_amount: float | None) -> bool:
+def _fd_records_complementary(existing: FixedDepositRecord, new_principal: Decimal,
+                              new_interest_amount: Decimal | None) -> bool:
     """Return True if ``new`` carries the field ``existing`` is missing.
 
     This prevents two genuinely distinct deposits that merely share the same
@@ -124,8 +125,8 @@ class IRBuilder:
         account_type: str = "unknown",
         currency: str = "",
         account_holder: str | None = None,
-        opening_balance: float | None = None,
-        closing_balance: float | None = None,
+        opening_balance: Decimal | None = None,
+        closing_balance: Decimal | None = None,
         extras: dict[str, Any] | None = None,
         investment_holdings: list[InvestmentHolding] | None = None,
     ) -> IRBuilder:
@@ -232,9 +233,9 @@ class IRBuilder:
         self,
         *,
         posted_date: str,
-        amount: float,
+        amount: Decimal,
         currency: str = "",
-        interest_amount: float | None = None,
+        interest_amount: Decimal | None = None,
         description: str = "",
         value_date: str | None = None,
         tags: list[str] | None = None,
@@ -242,7 +243,7 @@ class IRBuilder:
         is_reversal: bool = False,
         is_internal_transfer: bool = False,
         linked_txn_ids: list[str] | None = None,
-        balance_after: float | None = None,
+        balance_after: Decimal | None = None,
         extras: dict[str, Any] | None = None,
         _debug: DebugInfo | None = None,
     ) -> IRBuilder:
@@ -278,8 +279,8 @@ class IRBuilder:
         value_date: str | None = None,
         maturity_date: str | None = None,
         interest_rate: str | None = None,
-        interest_amount: float | None = None,
-        principal: float = 0.0,
+        interest_amount: Decimal | None = None,
+        principal: Decimal = Decimal("0.0"),
         currency: str = "",
         assume_pct_rate: bool = False,
     ) -> IRBuilder:
@@ -307,7 +308,7 @@ class IRBuilder:
             # Merge the complementary FD row into the existing record instead of
             # appending a duplicate (one row carries principal, the other interest).
             if not existing.principal:
-                existing.principal = principal or 0.0
+                existing.principal = principal or Decimal(0)
             if existing.interest_amount is None or existing.interest_amount == 0:
                 existing.interest_amount = interest_amount
             if not existing.raw_interest_rate:
@@ -341,7 +342,7 @@ class IRBuilder:
         """
         return self.add_transaction(
             posted_date=row.get("posted_date", ""),
-            amount=row.get("amount", 0),
+            amount=row.get("amount", Decimal(0)),
             currency=row.get("currency", ""),
             description=row.get("description", ""),
             value_date=row.get("value_date"),

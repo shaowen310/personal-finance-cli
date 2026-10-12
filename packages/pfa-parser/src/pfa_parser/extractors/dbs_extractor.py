@@ -6,6 +6,7 @@ Wraps ``dbs_parser.parse_dbs()`` and maps its output to a ``ParsedStatement``.
 from __future__ import annotations
 
 import re
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, ClassVar, override
 
@@ -137,16 +138,16 @@ class DBSExtractor(BaseExtractor):
 
             prev_fd_date = ""
             for t in txn_list:
-                withdrawal = float(str(t.get("withdrawal", "0") or "0").replace(",", ""))
-                deposit = float(str(t.get("deposit", "0") or "0").replace(",", ""))
+                withdrawal = Decimal(str(t.get("withdrawal", "0") or "0").replace(",", ""))
+                deposit = Decimal(str(t.get("deposit", "0") or "0").replace(",", ""))
                 amount = deposit - withdrawal
                 balance_str = str(t.get("balance", "") or "").replace(",", "")
-                balance = float(balance_str) if balance_str else None
+                balance = Decimal(balance_str) if balance_str else None
                 posted_date = _dbs_date_to_iso(str(t.get("txn_date", "")))
                 description = str(t.get("description", ""))
 
                 if is_fd:
-                    principal = _parse_float(t.get("principal")) or 0.0
+                    principal = _parse_float(t.get("principal")) or Decimal(0)
                     interest_rate = _parse_float(t.get("interest_rate"))
                     interest_amount = _parse_float(t.get("interest_amt"))
                     value_date_iso, maturity_date_iso = _dbs_period_to_dates_iso(
@@ -268,14 +269,16 @@ def _dbs_period_to_dates_iso(period: str) -> tuple[str | None, str | None]:
     return None, None
 
 
-def _parse_float(val: object) -> float | None:
-    """Parse a potentially comma-formatted value to float, returning None on failure."""
+def _parse_float(val: object) -> Decimal | None:
+    """Parse a potentially comma-formatted value to Decimal, returning None on failure."""
     if val is None:
         return None
-    if isinstance(val, (int, float)):
-        return float(val)
+    if isinstance(val, (int, Decimal)):
+        return Decimal(val)
+    if isinstance(val, float):
+        return Decimal(val)
     try:
         s = str(val).replace(",", "").strip()
-        return float(s) if s else None
-    except (ValueError, TypeError):
+        return Decimal(s) if s else None
+    except (ValueError, TypeError, InvalidOperation):
         return None

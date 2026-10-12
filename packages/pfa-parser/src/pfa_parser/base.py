@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass, field
 from abc import ABC, abstractmethod
+from decimal import Decimal
 
 from pfa_ir_schema import ParsedStatement
 
@@ -12,12 +13,12 @@ class Transaction:
 
     date: str
     description: str
-    amount: float  # signed: negative = debit (outflow), positive = credit (inflow)
+    amount: Decimal  # signed: negative = debit (outflow), positive = credit (inflow)
     currency: str = "SGD"
     account_name: str = ""
     account_no: str = ""
     account_type: str = ""
-    balance_after: float | None = None
+    balance_after: Decimal | None = None
     category: str | None = None
     tags: list[str] = field(default_factory=list)
     link_labels: list[str] = field(default_factory=list)

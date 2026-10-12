@@ -11,6 +11,7 @@ import hashlib
 import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import cast
 
 from .account_type import AccountType
@@ -21,7 +22,14 @@ from .common import parse_fd_rate
 # the dict-based (de)serialisation helpers. Replaces ``Any`` so the package stays
 # free of explicit ``Any`` under ``reportExplicitAny``.
 type JSONValue = (
-    dict[str, "JSONValue"] | list["JSONValue"] | str | int | float | bool | None
+    dict[str, "JSONValue"]
+    | list["JSONValue"]
+    | str
+    | int
+    | float
+    | Decimal
+    | bool
+    | None
 )
 
 
@@ -117,12 +125,12 @@ class Transaction:
     value_date: str | None = None  # Value date (optional)
 
     # === Amounts ===
-    amount: float = 0.0            # Signed amount in transaction currency
+    amount: Decimal = Decimal("0.0")   # Signed amount in transaction currency
     currency: str = ""             # Transaction currency (ISO 4217)
     # Interest leg of an FD closure / premature withdrawal. Carried on the
     # FD-account transaction so the linker can match the funding-account credit
     # (principal + interest) against the bare principal leg. None when N/A.
-    interest_amount: float | None = None
+    interest_amount: Decimal | None = None
 
     # === Description ===
     description: str = ""
@@ -150,7 +158,7 @@ class Transaction:
     linked_txn_ids: list[str] = field(default_factory=list)
 
     # === Balance ===
-    balance_after: float | None = None
+    balance_after: Decimal | None = None
 
     # === Bank-specific columns (free-form, for non-standard transaction fields) ===
     extras: dict[str, JSONValue] | None = None
@@ -173,8 +181,8 @@ class FixedDepositRecord:
     maturity_date: str | None = None  # ISO YYYY-MM-DD, normalized from source
     interest_rate: float | None = None          # canonical actual rate, e.g. 0.025
     raw_interest_rate: str | None = None        # raw printed string, e.g. "2.5%", for display
-    interest_amount: float | None = None  # renamed from interest_amt
-    principal: float = 0.0            # placed principal
+    interest_amount: Decimal | None = None  # renamed from interest_amt
+    principal: Decimal = Decimal("0.0")            # placed principal
     currency: str = ""
 
 
@@ -203,8 +211,8 @@ class Account:
     period_to: str | None = None
 
     # Balances: opening/closing may be txn-derived or summary-derived.
-    opening_balance: float | None = None
-    closing_balance: float | None = None
+    opening_balance: Decimal | None = None
+    closing_balance: Decimal | None = None
 
     transactions: list[Transaction] = field(default_factory=list)
 
@@ -275,9 +283,47 @@ def _dataclass_to_dict(obj: object) -> JSONValue:
     return cast(JSONValue, obj)
 
 
+def _json_default(o: object) -> object:
+    """JSON encoder hook: serialize ``Decimal`` losslessly as a string.
+
+    Binary ``float`` is never emitted for money; consumers must parse these
+    strings back via :func:`_to_decimal` / :func:`_to_decimal_or_none`.
+    """
+    if isinstance(o, Decimal):
+        return str(o)
+    raise TypeError(f"Object of type {type(o).__name__} is not JSON serializable")
+
+
 def to_json(statement: ParsedStatement, *, indent: int = 2) -> str:
     """Serialize a ParsedStatement to a JSON string."""
-    return json.dumps(_dataclass_to_dict(statement), indent=indent, ensure_ascii=False)
+    return json.dumps(
+        _dataclass_to_dict(statement),
+        indent=indent,
+        ensure_ascii=False,
+        default=_json_default,
+    )
+
+
+def _to_decimal(value: object) -> Decimal:
+    """Coerce a JSON money value (str/number/Decimal) to ``Decimal``.
+
+    ``None`` falls back to ``0``; strings are parsed directly (comma-free from
+    our own serializer, but tolerant anyway) so the JSON round-trip stays exact.
+    """
+    if isinstance(value, Decimal):
+        return value
+    if value is None:
+        return Decimal("0.0")
+    return Decimal(str(value))
+
+
+def _to_decimal_or_none(value: object) -> Decimal | None:
+    """Like :func:`_to_decimal` but preserves ``None``."""
+    if value is None:
+        return None
+    if isinstance(value, Decimal):
+        return value
+    return Decimal(str(value))
 
 
 def _transaction_from_dict(td: dict[str, JSONValue]) -> Transaction:
@@ -287,16 +333,16 @@ def _transaction_from_dict(td: dict[str, JSONValue]) -> Transaction:
         txn_id=cast(str, td.get("txn_id", "")),
         posted_date=cast(str, td.get("posted_date", "")),
         value_date=cast("str | None", td.get("value_date")),
-        amount=cast(float, td.get("amount", 0.0)),
+        amount=_to_decimal(td.get("amount", "0.0")),
         currency=cast(str, td.get("currency", "")),
-        interest_amount=cast("float | None", td.get("interest_amount")),
+        interest_amount=_to_decimal_or_none(td.get("interest_amount")),
         description=cast(str, td.get("description", "")),
         tags=cast("list[str]", td.get("tags", [])),
         link_labels=cast("list[str]", td.get("link_labels", [])),
         is_reversal=cast(bool, td.get("is_reversal", False)),
         is_internal_transfer=cast(bool, td.get("is_internal_transfer", False)),
         linked_txn_ids=cast("list[str]", td.get("linked_txn_ids") or []),
-        balance_after=cast("float | None", td.get("balance_after")),
+        balance_after=_to_decimal_or_none(td.get("balance_after")),
         extras=cast("dict[str, JSONValue] | None", td.get("extras")),
         _debug=(
             DebugInfo(
@@ -317,8 +363,8 @@ def _account_from_dict(ad: dict[str, JSONValue]) -> Account:
         currency=cast(str, ad.get("currency", "")),
         account_holder=cast("str | None", ad.get("account_holder")),
         institution=cast("str | None", ad.get("institution")),
-        opening_balance=cast("float | None", ad.get("opening_balance")),
-        closing_balance=cast("float | None", ad.get("closing_balance")),
+        opening_balance=_to_decimal_or_none(ad.get("opening_balance")),
+        closing_balance=_to_decimal_or_none(ad.get("closing_balance")),
         transactions=cast(
             "list[Transaction]",
             [_transaction_from_dict(cast("dict[str, JSONValue]", t)) for t in cast("list[JSONValue]", ad.get("transactions", []))],
@@ -353,8 +399,8 @@ def _fd_record_from_dict(rd: dict[str, JSONValue]) -> FixedDepositRecord:
         maturity_date=cast("str | None", rd.get("maturity_date")),
         interest_rate=rate,
         raw_interest_rate=raw,
-        interest_amount=cast("float | None", rd.get("interest_amount")),
-        principal=cast(float, rd.get("principal", 0.0)),
+        interest_amount=_to_decimal_or_none(rd.get("interest_amount")),
+        principal=_to_decimal(rd.get("principal", "0.0")),
         currency=cast(str, rd.get("currency", "")),
     )
 
@@ -466,6 +512,8 @@ def _sanitize_for_hash(value: object) -> str:
         return ""
     if isinstance(value, float):
         return f"{value:.2f}"
+    if isinstance(value, Decimal):
+        return f"{value:.2f}"
     if isinstance(value, bool):
         return "1" if value else "0"
     if isinstance(value, list):
@@ -475,7 +523,7 @@ def _sanitize_for_hash(value: object) -> str:
 
 def generate_txn_id(
     posted_date: str,
-    amount: float,
+    amount: Decimal | float,
     currency: str,
     description: str,
 ) -> str:

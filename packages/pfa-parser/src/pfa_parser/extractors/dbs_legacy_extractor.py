@@ -30,6 +30,7 @@ from pathlib import Path
 
 import pdfplumber
 from datetime import date
+from decimal import Decimal
 from pfa_ir_schema import ParsedStatement
 
 from .base import BaseExtractor
@@ -51,9 +52,9 @@ def _parse_dd_mon_year(text: str) -> tuple[int, int, int]:
     return (year, month, day)
 
 
-def _normalize_amount(raw: str) -> float:
-    """Convert a printed amount like ``"1,000.00"`` to float."""
-    return float(raw.replace(",", "").strip())
+def _normalize_amount(raw: str) -> Decimal:
+    """Convert a printed amount like ``"1,000.00"`` to Decimal (exact)."""
+    return Decimal(raw.replace(",", "").strip())
 
 # Column x0 boundaries (points) derived from the 2013 sample.
 _X_DATE_MAX = 90        # date token region ends here
