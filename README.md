@@ -96,6 +96,20 @@ Outputs in `tests/outputs/`:
 - `categories.json` — transaction → category mapping
 - `finance_report.md` — balance sheet, cash flow, income/expense/transfer breakdowns
 
+## Try it with your own statements
+
+A ready-to-use sandbox lives in [`examples/`](examples/), driven by two
+PowerShell scripts that wrap the `pfa` CLI:
+
+1. Drop each bank's statements under `examples/pdf/<bank>/estatements/`.
+2. Run [`examples/convert_estatements_to_ir.ps1`](examples/convert_estatements_to_ir.ps1)
+   to convert PDFs → IR (`examples/ir/<bank>/`).
+3. Run [`examples/build_monthly_report.ps1`](examples/build_monthly_report.ps1)
+   to consolidate and generate the report under `examples/report/monthly/<YYYYMM>/`.
+
+See [`examples/README.md`](examples/README.md) for the full folder layout,
+script parameters, and a single-command `pfa run` alternative.
+
 ## Dependency Graph
 
 ```
