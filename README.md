@@ -75,7 +75,7 @@ After either option, verify with `pfa --help`.
 | `pfa parse -i <file>` | Parse a bank statement PDF |
 | `pfa analyze -m <YYYYMM>` | Run financial analysis for a given month |
 | `pfa analyze -s <YYYYMMDD\|YYYYMM> -e <YYYYMMDD\|YYYYMM>` | Run analysis for a date range |
-| `pfa run --full` | Execute the full pipeline |
+| `pfa run -m <YYYYMM>` | Run full pipeline (parse → consolidate → categorize → analyze) for a month |
 
 ## Pipeline
 

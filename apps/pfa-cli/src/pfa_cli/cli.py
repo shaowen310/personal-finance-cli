@@ -92,7 +92,7 @@ def analyze(month: str | None, start_date: str | None, end_date: str | None,
         in_path = Path("tests/outputs/consolidated.ir.json")
     if not in_path.exists():
         raise click.BadParameter(
-            f"Consolidated IR file not found: {in_path}. Run 'pfa run --full' first or provide --input."
+            f"Consolidated IR file not found: {in_path}. Run 'pfa run -m <YYYYMM>' first or provide --input."
         )
 
     # Resolve output dir
@@ -149,11 +149,97 @@ def analyze(month: str | None, start_date: str | None, end_date: str | None,
 
 
 @cli.command()
-@click.option("--full", is_flag=True, help="Run full pipeline: parse → ir → categorize → analyze")
-def run(full: bool) -> None:
-    """Run the full personal finance pipeline."""
-    _ = full
-    click.echo("Full pipeline execution — coming soon.")
+@click.option("-m", "--month", required=True,
+              help="Month to process (YYYYMM, e.g. 202608); YYYYMMDD also accepted")
+@click.option("-i", "--input-dir", default="tests/cache",
+              help="Directory of bank statement PDFs (default: tests/cache)")
+@click.option("-o", "--output-dir", default="tests/outputs",
+              help="Output directory (default: tests/outputs)")
+@click.option("--rules", "rules_path", default=None,
+              help="Categorization rules YAML (default: package references/categories.yaml)")
+@click.option("--llm", is_flag=True, help="Use LLM fallback for uncategorized transactions")
+def run(month: str, input_dir: str, output_dir: str, rules_path: str | None,
+        llm: bool) -> None:
+    """Run the full pipeline for a given month: parse → consolidate → categorize → analyze.
+
+    The month only scopes the final report; parsing, consolidation and
+    categorization always run over all statements. Every invocation re-parses
+    the PDFs from scratch.
+
+    \b
+    Examples:
+      pfa run -m 202608
+      pfa run -m 202608 --llm
+      pfa run -m 202606 -i my_pdfs -o my_outputs
+    """
+    from pfa_analysis.categorize import (
+        categorize,
+        write_categories,
+        DEFAULT_RULES_PATH,
+    )
+    from pfa_analysis.report import render_consolidated_report
+    from pfa_ir_consolidator import consolidate_statements, embed_fx_rates
+    from pfa_ir_schema import from_json
+    from pfa_parser import SGBankPDFParser
+
+    # 1. Resolve the month into a (start, end) date range.
+    try:
+        parsed_month = parse_month(month)
+    except ValueError as e:
+        raise click.BadParameter(str(e))
+    if parsed_month is None:
+        raise click.BadParameter(f"Invalid month '{month}'. Expected YYYYMMDD or YYYYMM.")
+    start, end = parsed_month
+
+    in_dir = Path(input_dir)
+    out_dir = Path(output_dir)
+    ir_dir = out_dir / "ir"
+    ir_dir.mkdir(parents=True, exist_ok=True)
+
+    # 2. Parse every PDF into a per-bank IR JSON.
+    pdfs = sorted(in_dir.glob("*.pdf"))
+    if not pdfs:
+        raise click.BadParameter(f"No PDF files found in {in_dir}")
+    parser = SGBankPDFParser()
+    ir_files: list[Path] = []
+    for pdf in pdfs:
+        stmt = parser.parse(str(pdf))
+        ir_path = ir_dir / f"{pdf.stem}.ir.json"
+        _ = ir_path.write_text(stmt.to_json(indent=2), encoding="utf-8")
+        ir_files.append(ir_path)
+        click.echo(f"Parsed {pdf.name} -> {ir_path.name}")
+
+    # 3. Consolidate the IRs and embed FX rates.
+    stmts = [(str(p), from_json(p.read_text(encoding="utf-8"))) for p in ir_files]
+    consolidated, total_in, deduped, filtered = consolidate_statements(
+        stmts, do_dedup=True
+    )
+    consolidated = embed_fx_rates(consolidated)
+    consolidated_path = out_dir / "consolidated.ir.json"
+    _ = consolidated_path.write_text(consolidated.to_json(indent=2), encoding="utf-8")
+    total_out = total_in - deduped - filtered
+    click.echo(
+        f"Consolidated -> {consolidated_path.name} "
+        f"(txns_in={total_in} txns_out={total_out} deduped={deduped})"
+    )
+
+    # 4. Categorize transactions.
+    rules = Path(rules_path) if rules_path else DEFAULT_RULES_PATH
+    categories = categorize(consolidated_path, rules, use_llm=llm)
+    cat_path = out_dir / "categories.json"
+    write_categories(categories, cat_path)
+    click.echo(f"Categorized -> {cat_path.name} ({len(categories)} transactions)")
+
+    # 5. Render the finance report for the requested month.
+    md = render_consolidated_report(
+        consolidated_path,
+        categories_path=cat_path,
+        start_date=start,
+        end_date=end,
+    )
+    report_path = out_dir / "finance_report.md"
+    _ = report_path.write_text(md, encoding="utf-8")
+    click.echo(f"Report ({start} to {end}) -> {report_path.name}")
 
 
 @cli.command()
