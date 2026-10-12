@@ -516,6 +516,67 @@ def link_currency_conversions(statement: ParsedStatement) -> ParsedStatement:
         if warn not in statement.warnings:
             statement.warnings.append(warn)
 
+    # --- Path 2: same-bank FX with no "Currency Conversion" keyword / ref id ---
+    # Some banks (e.g. ICBC) print an in-house currency conversion as two legs
+    # that share an *identical* description (e.g. "TRFZHOU SHAOWEN") but differ
+    # in currency, posted on the same day at the same institution, with opposite
+    # cash-flow direction (one debit, one credit).  The equal description across
+    # currencies is the distinguishing signal — a genuine same-bank transfer to a
+    # person is normally a single currency (or carries its own transfer keyword),
+    # so cross-currency same-description pairs are treated as FX conversions.
+    # This heuristic is ONLY applied to ICBC_SG (see the guard below) to avoid
+    # false positives at other banks.
+    by_desc: dict[tuple[str, str, str], list[tuple[int, Account, Transaction]]] = {}
+    for ai, acct in enumerate(statement.accounts):
+        for _, txn in enumerate(acct.transactions or []):
+            if txn.is_internal_transfer:
+                continue
+            # Skip legs already linked as a currency conversion by Path 1.
+            if REL_CURRENCY_CONVERSION in (txn.link_labels or []):
+                continue
+            desc = (txn.description or "").strip().upper()
+            if not desc or not txn.posted_date:
+                continue
+            inst = institution_by_account.get(acct.account_no, "")
+            # Path 2 (same-description, cross-currency FX) is only safe for banks
+            # that print conversions without a "Currency Conversion" keyword or
+            # reference id. Currently only ICBC is known to do this, so we
+            # restrict it to ICBC_SG to avoid false positives at other banks.
+            if inst != "ICBC_SG":
+                continue
+            by_desc.setdefault((inst, txn.posted_date, desc), []).append((ai, acct, txn))
+
+    for (inst, _posted_date, _desc), entries in by_desc.items():
+        # Greedily pair one credit (inflow) with one debit (outflow) whose
+        # currency differs — that difference is what marks it as an FX conversion
+        # rather than a same-currency transfer.
+        credits = [e for e in entries if e[2].amount > 0]
+        debits = [e for e in entries if e[2].amount < 0]
+        used_c: set[int] = set()
+        used_d: set[int] = set()
+        for ci, ce in enumerate(credits):
+            if ci in used_c:
+                continue
+            for di, de in enumerate(debits):
+                if di in used_d or ce[2].currency == de[2].currency:
+                    continue
+                _cross_link(ce[2], de[2], labels=(REL_CURRENCY_CONVERSION,), mark_internal=False)
+                matched_pairs += 1
+                used_c.add(ci)
+                used_d.add(di)
+                warn = (
+                    f"Currency conversion transfer detected: {ce[2].txn_id!r} "
+                    f"({_acct_type_abbr(ce[1].account_type)} {ce[1].account_no}, "
+                    f"{ce[2].currency} {ce[2].amount:,.2f}, {inst}) → "
+                    f"{de[2].txn_id!r} "
+                    f"({_acct_type_abbr(de[1].account_type)} {de[1].account_no}, "
+                    f"{de[2].currency} {de[2].amount:,.2f}, {inst}), "
+                    f"same-description FX (desc={_desc!r})"
+                )
+                if warn not in statement.warnings:
+                    statement.warnings.append(warn)
+                break
+
     # Record detection stats in extras.
     _record_detection_stat(statement, "currency_conversion_detected", matched_pairs)
 
