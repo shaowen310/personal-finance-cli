@@ -134,7 +134,7 @@ def link_fd_to_ca(statement: ParsedStatement) -> ParsedStatement:
     Naming convention: this uses the ``link_*`` verb per the contract documented in
     ``pfa_ir_verifier.verify`` (module docstring) — ``link_*`` denotes a *mutating*
     relationship pass that writes ``linked_txn_ids`` / ``link_labels``. Read-only /
-    warning-only checks use ``find_*`` / ``verify_*`` instead.
+    warning-only checks use ``detect_*`` / ``verify_*`` instead.
     """
     fd_accounts = [a for a in statement.accounts
                    if a.account_type == AccountType.FIXED_DEPOSIT.value]

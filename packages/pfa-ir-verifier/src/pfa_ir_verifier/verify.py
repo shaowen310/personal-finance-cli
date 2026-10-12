@@ -17,7 +17,7 @@ glance whether a pass mutates the IR or merely reports on it:
   / remove transactions) and return the mutated ``ParsedStatement``. ``link_*``
   lives in ``pfa-ir-consolidator`` (e.g. ``link_transfers.py``) and the parser's
   ``link_fd_to_ca``; ``promote_*`` / ``demote_*`` are this module's in-place fixers.
-* ``find_*`` — **read-only**. Detects problems and returns a structured
+* ``detect_*`` — **read-only**. Detects problems and returns a structured
   ``IrVerificationReport``; it never mutates the input.
 * ``verify_*`` — **read-only, warning-only**. Checks the IR and appends
   human-facing messages to ``statement.warnings``, returning the (otherwise
@@ -27,7 +27,7 @@ glance whether a pass mutates the IR or merely reports on it:
 Public API
 ----------
 * :class:`IrVerificationReport` — structured result of a verification run.
-* :func:`find_internal_transfer_orphans` — read-only check; finds internal
+* :func:`detect_internal_transfer_orphans` — read-only check; finds internal
   transfers that have no equal-magnitude opposite leg.
 * :func:`demote_orphan_internal_transfers` — fixer; demotes orphan internal-flagged
   rows in place and returns what changed.
@@ -260,7 +260,7 @@ def _detect_orphans(txns: list[Txn]) -> list[InternalTransferIssue]:
     return issues
 
 
-def find_internal_transfer_orphans(
+def detect_internal_transfer_orphans(
     ir: IrInput,
 ) -> IrVerificationReport:
     """Read-only verification: detect unpaired internal transfers.
@@ -626,7 +626,7 @@ def verify_ir(path_or_ir: IrInput) -> IrVerificationReport:
         ir = from_json(Path(ir).read_text(encoding="utf-8"))
     if isinstance(ir, ParsedStatement):
         verify_txn_links(ir)
-    return find_internal_transfer_orphans(ir)
+    return detect_internal_transfer_orphans(ir)
 
 
 def verify_account_balances(statement: ParsedStatement) -> ParsedStatement:
