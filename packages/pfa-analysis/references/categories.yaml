@@ -14,8 +14,8 @@
 #   - Income   (Salary, Bonus, Interest, Dividends, Investment,
 #               Cashback, Other)
 #   - Expense  (Groceries, Dining, Transport, Utilities, Shopping, Travel,
-#               Entertainment, Health, Personal Care, Bank Fees, CW, Tax,
-#               Productivity, Other)
+#               Entertainment, Health, Personal Care, Education, Bank Fees, CW,
+#               Tax, Productivity, Other)
 #   - Transfer (Internal, External)
 
 categories:
@@ -35,6 +35,7 @@ categories:
   - "Expense: Entertainment"
   - "Expense: Health"
   - "Expense: Personal Care"
+  - "Expense: Education"
   - "Expense: CW"
   - "Expense: Tax"
   - "Expense: Productivity"
@@ -45,60 +46,63 @@ categories:
 
 rules:
   # =========================================================================
-  # 1. Income — classified by source (Bonus before Salary to avoid overlap)
+  # INCOME
   # =========================================================================
+
+  # -------------------------------------------------------------------------
+  # 1.1 Income: Bonus
+  # -------------------------------------------------------------------------
   - category: "Income: Bonus"
     match:
       - BONUS
 
+  # -------------------------------------------------------------------------
+  # 1.2 Income: Dividends
+  # -------------------------------------------------------------------------
   - category: "Income: Dividends"
     match:
       - DIVIDEND
 
+  # -------------------------------------------------------------------------
+  # 1.3 Income: Interest
+  # -------------------------------------------------------------------------
   - category: "Income: Interest"
     match:
       - CREDIT INTEREST
       - INTEREST CREDIT
       - INTEREST EARNED
       - INTERESTINT
+      - INTEREST
       - SYNTHETIC
       - FIXED DEPOSIT
       - FDWD
       - TIME DEPO AUTO ROLLOVER
+      - TIME DEPO
 
+  # -------------------------------------------------------------------------
+  # 1.4 Income: Salary
+  # -------------------------------------------------------------------------
   - category: "Income: Salary"
     match:
       - SALARY
       - PAYROLL
       - IBG GIRO SALA
 
-  - category: "Income: Bonus"
-    match:
-      - BONUS
-
-  - category: "Income: Interest"
-    match:
-      - INTEREST
-      - INTERESTINT
-      - CREDIT INTEREST
-      - INTEREST CREDIT
-      - INTEREST EARNED
-      - FIXED DEPOSIT
-      - FDWD
-      - TIME DEPO
-
-  - category: "Income: Dividends"
-    match:
-      - DIVIDEND
-
+  # -------------------------------------------------------------------------
+  # 1.5 Income: Cashback
+  # -------------------------------------------------------------------------
   - category: "Income: Cashback"
     match:
       - CASH REBATE
       - REBATE
 
   # =========================================================================
-  # 2. Groceries — supermarkets, specialty grocers, convenience
+  # EXPENSE
   # =========================================================================
+
+  # -------------------------------------------------------------------------
+  # 2.1 Expense: Groceries — supermarkets, specialty grocers, convenience
+  # -------------------------------------------------------------------------
   - category: "Expense: Groceries"
     match:
       - NTUC
@@ -115,11 +119,12 @@ rules:
       - MITSUKO
       - HYPERMARKET
       - MARKETPLACE
+      - LPI ECO PRIME
 
-  # =========================================================================
-  # 3. Dining — restaurants, cafes, food courts, bakeries, delivery
+  # -------------------------------------------------------------------------
+  # 2.2 Expense: Dining — restaurants, cafes, food courts, bakeries, delivery
   #    (must come BEFORE generic Transfer so PAYNOW to eateries is caught)
-  # =========================================================================
+  # -------------------------------------------------------------------------
   - category: "Expense: Dining"
     match:
       # Fast food
@@ -141,6 +146,7 @@ rules:
       - COCO ICHIBANYA
       - SOUP
       - YAPPARI
+      - BUTAHAGE
       - HAWON
       - LEE BAI
       # Cafes & bubble tea
@@ -153,14 +159,17 @@ rules:
       - DAILY CUT
       - TOMOCAFE
       - COFFEE BEAN
+      - KOONG WOH TONG
       # Food courts / hawker
       - HAWKER
       - KOPITIAM
       - KOUFU
       - FR JWL
       - FOOD ARENA
+      - RFA_FB
       # Bakeries
       - SWEE HENG
+      - TOSUTA
       # Chicken / soup / speciality
       - OMMA CHICKEN
       - CHICKEN SOUP
@@ -173,9 +182,9 @@ rules:
       - DELIVEROO
       - ORDER9720
 
-  # =========================================================================
-  # 4. Shopping — retail, online marketplaces, apparel, electronics
-  # =========================================================================
+  # -------------------------------------------------------------------------
+  # 2.3 Expense: Shopping — retail, online marketplaces, apparel, electronics
+  # -------------------------------------------------------------------------
   - category: "Expense: Shopping"
     match:
       # Online marketplaces
@@ -204,9 +213,9 @@ rules:
       - LOTTE DUTY FREE
       - SHILLA
 
-  # =========================================================================
-  # 5. Travel — flights, hotels, OTAs, travel activities
-  # =========================================================================
+  # -------------------------------------------------------------------------
+  # 2.4 Expense: Travel — flights, hotels, OTAs, travel activities
+  # -------------------------------------------------------------------------
   - category: "Expense: Travel"
     match:
       - KLOOK
@@ -217,9 +226,9 @@ rules:
       - SCOOT
       - HOTEL
 
-  # =========================================================================
-  # 6. Entertainment — gaming, streaming, subscriptions, digital content
-  # =========================================================================
+  # -------------------------------------------------------------------------
+  # 2.5 Expense: Entertainment — gaming, streaming, subscriptions, digital content
+  # -------------------------------------------------------------------------
   - category: "Expense: Entertainment"
     match:
       - GOOGLE YOUTUBE
@@ -231,10 +240,12 @@ rules:
       - NETFLIX
       - SPOTIFY
       - DISNEY
+      # Offline
+      - RFA MEMBERSHIP
 
-  # =========================================================================
-  # 7. Personal Care — laundry, haircut, beauty services
-  # =========================================================================
+  # -------------------------------------------------------------------------
+  # 2.6 Expense: Personal Care — laundry, haircut, beauty services
+  # -------------------------------------------------------------------------
   - category: "Expense: Personal Care"
     match:
       - EZ WASH
@@ -242,9 +253,9 @@ rules:
       - KCUTS
       - SEPHORA
 
-  # =========================================================================
-  # 8. Health — pharmacies, clinics, hospitals
-  # =========================================================================
+  # -------------------------------------------------------------------------
+  # 2.7 Expense: Health — pharmacies, clinics, hospitals
+  # -------------------------------------------------------------------------
   - category: "Expense: Health"
     match:
       - GUARDIAN
@@ -256,18 +267,38 @@ rules:
       - HOSPITAL
       - DENTAL
 
-  # =========================================================================
-  # 8b. Productivity — AI/ML services and subscriptions
-  # =========================================================================
+  # -------------------------------------------------------------------------
+  # 2.8 Expense: Productivity — AI/ML services and subscriptions
+  # -------------------------------------------------------------------------
   - category: "Expense: Productivity"
     match:
       - CAKEGROWTH
       - GOOGLE CLOUD
       - CENTAURI
 
-  # =========================================================================
-  # 9. Bank Fees — bank charges, misc debits, FX conversion fees
-  # =========================================================================
+  # -------------------------------------------------------------------------
+  # 2.9 Expense: Education — tuition, schools, courses, learning subscriptions
+  # -------------------------------------------------------------------------
+  - category: "Expense: Education"
+    match:
+      - TUITION
+      - TUTOR
+      - SCHOOL
+      - PRESCHOOL
+      - KINDERGARTEN
+      - ENRICHMENT
+      - ACADEMY
+      - UNIVERSITY
+      - COLLEGE
+      - EDUCATION
+      - COURSE
+      - LEARNING
+      - EDU
+      - CFA INSTITUTE
+
+  # -------------------------------------------------------------------------
+  # 2.10 Expense: Bank Fees — bank charges, misc debits, FX conversion fees
+  # -------------------------------------------------------------------------
   - category: "Expense: Bank Fees"
     match:
       - SERVICE CHARGE
@@ -278,28 +309,58 @@ rules:
       - CCY CONVERSION FEE
       - OD INT CHARGE
 
-  # =========================================================================
-  # 9a. Tax — IRAS income tax, GIRO tax deductions
-  # =========================================================================
+  # -------------------------------------------------------------------------
+  # 2.11 Expense: Tax — IRAS income tax, GIRO tax deductions
+  # -------------------------------------------------------------------------
   - category: "Expense: Tax"
     match:
       - INWARD DR - GIRO TAX
       - IRAS
 
-  # =========================================================================
-  # 9b. Cash Withdrawal — ATM / over-the-counter cash withdrawals
-  # =========================================================================
+  # -------------------------------------------------------------------------
+  # 2.12 Expense: CW — ATM / over-the-counter cash withdrawals
+  # -------------------------------------------------------------------------
   - category: "Expense: CW"
     match:
       - CASH WITHDRAWAL
 
+  # -------------------------------------------------------------------------
+  # 2.13 Expense: Transport — public transit, ride-hailing, taxis
+  # -------------------------------------------------------------------------
+  - category: "Expense: Transport"
+    match:
+      - BUS/MRT
+      - TRANSIT
+      - TAXI
+      - COMFORT
+      - GOJEK
+      - GRABPAY
+      - GRAB MAKATI
+
+  # -------------------------------------------------------------------------
+  # 2.14 Expense: Utilities — electricity, water, telco, town council
+  # -------------------------------------------------------------------------
+  - category: "Expense: Utilities"
+    match:
+      - SP SERVICES
+      - TOWN COUNCIL
+      - PUB
+      - SINGTEL
+      - STARHUB
+      - M1
+
   # =========================================================================
-  # 10. Transfer — Internal transfers are detected via IR is_internal_transfer
-  #     (pre-classified before rules).  External transfers are auto-detected
-  #     by the script AND keyword-matched here.
-  #     MUST come AFTER merchant rules so "PAYNOW to SWEE HENG" is caught by
-  #     Dining, not Transfer.
+  # TRANSFER
   # =========================================================================
+
+  # -------------------------------------------------------------------------
+  # 3.1 Transfer: External
+  #    Internal transfers are detected via IR is_internal_transfer
+  #    (pre-classified before rules).  External transfers are auto-detected
+  #    by the script AND keyword-matched here.
+  #    MUST come AFTER merchant rules so "PAYNOW to SWEE HENG" is caught by
+  #    Dining, not Transfer.
+  # -------------------------------------------------------------------------
   - category: "Transfer: External"
     match:
       - E-BANKING TRANSFER
@@ -311,28 +372,3 @@ rules:
       - PAYNOW TO
       - CURRENCY CONVERSION
       - TOP-UP TO PAYLAH
-
-  # =========================================================================
-  # 11. Transport — public transit, ride-hailing, taxis
-  # =========================================================================
-  - category: "Expense: Transport"
-    match:
-      - BUS/MRT
-      - TRANSIT
-      - TAXI
-      - COMFORT
-      - GOJEK
-      - GRABPAY
-      - GRAB MAKATI
-
-  # =========================================================================
-  # 12. Utilities — electricity, water, telco, town council
-  # =========================================================================
-  - category: "Expense: Utilities"
-    match:
-      - SP SERVICES
-      - TOWN COUNCIL
-      - PUB
-      - SINGTEL
-      - STARHUB
-      - M1
