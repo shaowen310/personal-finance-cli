@@ -102,9 +102,10 @@ def parse_ir(path: Path) -> TxnIR:
                     "txn_id": txn.txn_id,
                     "date": txn.posted_date,
                     "description": txn.description,
-                    "amount": txn.amount,
+                    "amount": float(txn.amount),
                     "currency": txn.currency,
-                    "balance_after": txn.balance_after,
+                    "balance_after": (float(txn.balance_after)
+                                     if txn.balance_after is not None else None),
                     "bank": institution,
                     "account": account_no,
                     "category_hint": hint,
