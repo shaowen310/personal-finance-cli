@@ -328,7 +328,7 @@ def render_report(result: AnalysisResult, consolidated: bool = False,
                              if total_income > 0
                              else "n/a")
             out.append("")
-            out.append(f"- **Total Savings Rate:** {total_savings}")
+            out.append(f"- **Total Savings Rate (Net / Income):** {total_savings}")
         else:
             out.append(
                 f"\n- **Net Position (cash + deposits + investments):** {fmt(net_pos)} "
@@ -534,6 +534,9 @@ def render_report(result: AnalysisResult, consolidated: bool = False,
             if use_fx:
                 cf_vals.append(fmt(row_sgd))
             out.append(" | ".join(cf_vals) + " |")
+        # Blank line terminates the table before the following note paragraph
+        # (Markdown requires a blank line between a table and a non-table block).
+        out.append("")
         out.append(
             "_Internal transfers between your own accounts net to zero and are "
             "excluded from the funds flow; see §Internal Transfers. Currency "
