@@ -97,6 +97,86 @@ def parse_num(s: object) -> float | None:
 
 
 # ---------------------------------------------------------------------------
+# Transfer-recipient ("To Account") extraction
+# ---------------------------------------------------------------------------
+#
+# Best-effort extraction of the transfer recipient from a transaction description.
+# This is analysis-layer logic (the description carries the payee), so it lives
+# here rather than in the renderer; the renderer simply reads the precomputed
+# ``counterparty`` field on each DrilldownTxn.
+
+# Tokens that terminate the recipient ("To Account") name in a "TO: <name> ..."
+# description (e.g. "... TO: ZXXXX QXXXXXX PAYNOW TRANSFER OTHER").
+_TO_STOP_WORDS = {
+    "PAYNOW", "TRANSFER", "OTHER", "OTHR", "FAST", "PAYMENT", "RECEIPT",
+    "GIRO", "RENT", "MOBILE",
+}
+_REF_TOKEN_RE = re.compile(r"[A-Z0-9]{6,}")
+_TO_COLON_RE = re.compile(r"\bTO:\s*(.+)", re.IGNORECASE)
+_PAYNOW_FAST_RE = re.compile(r"PAYNOW-?FAST\s+(\S+)\s+(.+)")
+# DBS I-BANK external bank transfer (account number is the payee). Kept
+# DBS-specific (rather than a generic any-bank rule) so it does not fabricate a
+# payee from unrelated descriptions. Tolerates spacing/casing variants
+# (DBS:I-BANK, DBS I-BANK, DBS IBANK) and space/dash-grouped account numbers.
+_DBANK_RE = re.compile(r"DBS[:\s.-]*I[\s.-]?BANK\s+(\d[\d\s-]*)", re.IGNORECASE)
+_PAYLAH_RE = re.compile(r"PAYLAH!?\s*:\s*(\d+)")
+
+
+def extract_to_account(description: str) -> str:
+    """Best-effort extraction of the transfer recipient ("To Account") from a
+    transaction description. Returns ``""`` when no recipient can be determined.
+
+    Handles the common Singapore FAST / PayNow external-transfer formats seen in
+    bank statements:
+      * ``... TO: <NAME> ... PAYNOW/OTHER ...``   (DBS FAST PayNow)
+      * ``PAYNOW-FAST <ref> <NA/ME> OTHR ...``      (UOB PayNow-FAST)
+      * ``Funds Transfer DBS:I-BANK <acct> ...``      (external bank transfer)
+      * ``Funds Transfer TOP-UP TO PAYLAH! : <hp>`` (PayLah! top-up)
+
+    For the ``TO:`` / ``PAYNOW-FAST`` forms the name is taken up to the first
+    known stop word or reference token (``[A-Z0-9]{6,}`` containing a digit),
+    which strips trailing purpose codes (RENT, OTHER, ...) and UEN/reference
+    numbers.
+    """
+    if not description:
+        return ""
+    d = " ".join(description.split())
+    # 1) Explicit "TO: <name>"
+    m = _TO_COLON_RE.search(d)
+    if m:
+        name = m.group(1).strip()
+    else:
+        # 2) UOB PayNow-FAST <ref> <NAME> OTHR ...
+        m = _PAYNOW_FAST_RE.search(d)
+        if m:
+            name = m.group(2).strip()
+        else:
+            # 3) DBS I-BANK external bank transfer (account number is the payee).
+            #    Tolerates spacing/casing variants and space/dash-grouped account
+            #    numbers.
+            m = _DBANK_RE.search(d)
+            if m:
+                acct = re.sub(r"\D", "", m.group(1))
+                if acct:
+                    return f"DBS:I-BANK {acct}"
+            # 4) PayLah! top-up.
+            m = _PAYLAH_RE.search(d)
+            if m:
+                return f"PAYLAH! : {m.group(1)}"
+            return ""
+    tokens = name.split()
+    kept: list[str] = []
+    for tok in tokens:
+        ut = tok.upper().strip(".,():")
+        if ut in _TO_STOP_WORDS:
+            break
+        if _REF_TOKEN_RE.fullmatch(tok) and any(ch.isdigit() for ch in tok):
+            break
+        kept.append(tok)
+    return " ".join(kept).strip()
+
+
+# ---------------------------------------------------------------------------
 # Schema adaptation points
 # ---------------------------------------------------------------------------
 #
@@ -878,6 +958,7 @@ def build_income_expense_drilldowns(
                 "bank": str(row.get("bank", "")),
                 "account": str(row.get("account", "")),
                 "account_type": str(row.get("account_type", "")),
+                "counterparty": extract_to_account(str(row.get("description", ""))),
             })
         elif cat_cls == "Income":
             src = cat_sub or cat_full or UNCATEGORIZED
@@ -891,6 +972,7 @@ def build_income_expense_drilldowns(
                 "bank": str(row.get("bank", "")),
                 "account": str(row.get("account", "")),
                 "account_type": str(row.get("account_type", "")),
+                "counterparty": extract_to_account(str(row.get("description", ""))),
             })
         elif cat_cls == "Transfer":
             # Internal transfers are own-account moves with no net effect, so they
@@ -913,7 +995,8 @@ def build_income_expense_drilldowns(
                     "bank": str(row.get("bank", "")),
                     "account": str(row.get("account", "")),
                     "account_type": str(row.get("account_type", "")),
-                })
+                    "counterparty": extract_to_account(str(row.get("description", ""))),
+                    })
             elif flow == "Transfer Out":
                 cat_disp = "Transfer Out (External)"
                 amt = _expense_contrib(float(row["amount"]), row.get("account_type", ""))
@@ -926,7 +1009,8 @@ def build_income_expense_drilldowns(
                     "bank": str(row.get("bank", "")),
                     "account": str(row.get("account", "")),
                     "account_type": str(row.get("account_type", "")),
-                })
+                    "counterparty": extract_to_account(str(row.get("description", ""))),
+                    })
         else:
             # Fallback: transaction not yet categorized — use cash-flow
             # classification to assign to income or expense.
@@ -943,7 +1027,8 @@ def build_income_expense_drilldowns(
                     "bank": str(row.get("bank", "")),
                     "account": str(row.get("account", "")),
                     "account_type": str(row.get("account_type", "")),
-                })
+                    "counterparty": extract_to_account(str(row.get("description", ""))),
+                    })
             elif flow == "Expense":
                 cat_disp = cat_sub or cat_full or UNCATEGORIZED
                 amt = _expense_contrib(float(row["amount"]), row.get("account_type", ""))
@@ -956,7 +1041,8 @@ def build_income_expense_drilldowns(
                     "bank": str(row.get("bank", "")),
                     "account": str(row.get("account", "")),
                     "account_type": str(row.get("account_type", "")),
-                })
+                    "counterparty": extract_to_account(str(row.get("description", ""))),
+                    })
 
     for src in sorted(src_ccy, key=lambda s: -sum(src_ccy[s].values())):
         income_drill.append({
@@ -1046,6 +1132,7 @@ def build_transfer_drilldown(
             "bank": str(row.get("bank", "")),
             "account": str(row.get("account", "")),
             "account_type": str(row.get("account_type", "")),
+            "counterparty": extract_to_account(str(row.get("description", ""))),
             "txn_id": str(row.get("txn_id", "")),
             "linked_txn_ids": list(row.get("linked_txn_ids", []) or []),
         })

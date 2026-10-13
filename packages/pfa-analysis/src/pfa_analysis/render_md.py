@@ -82,7 +82,8 @@ def _it_display_amount(txn: DrilldownTxn) -> float:
 def _render_txn_detail_table(out: list[str], entries: list[IncomeExpenseGroup] | list[TransferGroup], key: str,
                              use_fx: bool,
                              fx_rates: FxWrapper | None,
-                             signed_total: bool = False) -> dict[str, float]:
+                             signed_total: bool = False,
+                             to_account_for: set[str] | None = None) -> dict[str, float]:
     """Append a per-transaction detail table (used by the income, expense and
     transfer drill-downs) to ``out``.
 
@@ -111,31 +112,61 @@ def _render_txn_detail_table(out: list[str], entries: list[IncomeExpenseGroup] |
         txns = entry.get("transactions", [])
         if not txns:
             continue
+        # Only add the "Counterparty" column when at least one transaction in this
+        # entry yields a detectable recipient, and (when ``to_account_for`` is
+        # given) the entry's category is one of those listed. This keeps tables
+        # that aren't external transfers (and entries with no payee) at their
+        # original layout.
+        to_accounts = [t.get("counterparty", "") for t in txns]
+        show_to = any(to_accounts) and (
+            to_account_for is None or entry.get(key) in to_account_for
+        )
         out.append(f"### {heading}\n")
         if use_fx:
-            out.append("| Date | Institution | Account | Account Type | Description | CCY | OC | SGD Eq. |")
-            out.append("|---|---|---|---|---|---:|---:|---:|")
+            if show_to:
+                out.append("| Date | Institution | Account | Account Type | Counterparty | Description | CCY | OC | SGD Eq. |")
+                out.append("|---|---|---|---|---|---|---:|---:|---:|")
+            else:
+                out.append("| Date | Institution | Account | Account Type | Description | CCY | OC | SGD Eq. |")
+                out.append("|---|---|---|---|---|---:|---:|---:|")
         else:
-            out.append("| Date | Institution | Account | Account Type | Description | CCY | OC |")
-            out.append("|---|---|---|---|---|---:|---:|")
+            if show_to:
+                out.append("| Date | Institution | Account | Account Type | Counterparty | Description | CCY | OC |")
+                out.append("|---|---|---|---|---|---:|---:|")
+            else:
+                out.append("| Date | Institution | Account | Account Type | Description | CCY | OC |")
+                out.append("|---|---|---|---|---|---:|---:|")
         ccy_net: dict[str, float] = {}
-        for t in txns:
+        for t, to_acct in zip(txns, to_accounts):
             desc = t["description"].strip().replace("|", "\\|")
             ccy = t.get("currency", "")
             amt = float(t["amount"])
             oc = fmt(amt)
+            to_cell = to_acct.replace("|", "\\|")
             if use_fx:
                 ccy_net[ccy] = ccy_net.get(ccy, 0.0) + amt
                 sgd = convert_to_sgd(amt, ccy, fx_rates)
-                out.append(
-                    f"| {t['date']} | {t.get('bank', '')} | {t.get('account', '')} | "+
-                    f"{t.get('account_type', '')} | {desc} | {ccy} | {oc} | {fmt(sgd)} |"
-                )
+                if show_to:
+                    out.append(
+                        f"| {t['date']} | {t.get('bank', '')} | {t.get('account', '')} | "+
+                        f"{t.get('account_type', '')} | {to_cell} | {desc} | {ccy} | {oc} | {fmt(sgd)} |"
+                    )
+                else:
+                    out.append(
+                        f"| {t['date']} | {t.get('bank', '')} | {t.get('account', '')} | "+
+                        f"{t.get('account_type', '')} | {desc} | {ccy} | {oc} | {fmt(sgd)} |"
+                    )
             else:
-                out.append(
-                    f"| {t['date']} | {t.get('bank', '')} | {t.get('account', '')} | "+
-                    f"{t.get('account_type', '')} | {desc} | {ccy} | {oc} |"
-                )
+                if show_to:
+                    out.append(
+                        f"| {t['date']} | {t.get('bank', '')} | {t.get('account', '')} | "+
+                        f"{t.get('account_type', '')} | {to_cell} | {desc} | {ccy} | {oc} |"
+                    )
+                else:
+                    out.append(
+                        f"| {t['date']} | {t.get('bank', '')} | {t.get('account', '')} | "+
+                        f"{t.get('account_type', '')} | {desc} | {ccy} | {oc} |"
+                    )
         if use_fx:
             if signed_total:
                 total = sum(
@@ -148,9 +179,14 @@ def _render_txn_detail_table(out: list[str], entries: list[IncomeExpenseGroup] |
                     for c, net in ccy_net.items()
                 )
             totals[heading] = total
-            out.append(
-                f"| | | | | **Total SGD Eq.** | | | **{fmt(total)}** |"
-            )
+            if show_to:
+                out.append(
+                    f"| | | | | | **Total SGD Eq.** | | | **{fmt(total)}** |"
+                )
+            else:
+                out.append(
+                    f"| | | | | **Total SGD Eq.** | | | **{fmt(total)}** |"
+                )
         out.append("\n")
     return totals
 
@@ -614,7 +650,8 @@ def render_report(result: AnalysisResult, consolidated: bool = False,
         out.append("")
 
         expense_detail_totals = _render_txn_detail_table(
-            out, expense_drilldown, "category", use_fx, fx_rates)
+            out, expense_drilldown, "category", use_fx, fx_rates,
+            to_account_for={"Transfer Out (External)"})
         for cat, sgd in expense_summary_sgd.items():
             _assert_sgd_total("Expense Breakdown", cat, sgd,
                               expense_detail_totals.get(cat, 0.0))

@@ -55,6 +55,7 @@ class DrilldownTxn(TypedDict):
     bank: str
     account: str
     account_type: str
+    counterparty: NotRequired[str]
     txn_id: NotRequired[str]
     linked_txn_ids: NotRequired[list[str]]
 
