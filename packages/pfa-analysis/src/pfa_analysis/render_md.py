@@ -330,8 +330,9 @@ def render_report(result: AnalysisResult, consolidated: bool = False,
             out.append("")
             out.append(f"- **Total Savings Rate (Net / Income):** {total_savings}")
         else:
+            out.append("")  # blank line terminates Table 1 before the note
             out.append(
-                f"\n- **Net Position (cash + deposits + investments):** {fmt(net_pos)} "
+                f"- **Net Position (cash + deposits + investments):** {fmt(net_pos)} "
                 + "across the currencies above.\n"
             )
     else:
@@ -414,8 +415,11 @@ def render_report(result: AnalysisResult, consolidated: bool = False,
             vals.append(fmt(row_sgd))
         out.append(" | ".join(vals) + " |")
 
-    if use_fx:
-        out.append("")  # blank line after table
+    # Blank line terminates the table before any following note or section
+    # heading. Required in both FX and non-FX layouts: Markdown needs a blank
+    # line between a table and a non-table block (otherwise the table isn't
+    # closed and the next block renders incorrectly).
+    out.append("")
     if not mbc:
         out.append("_No transactions \u2014 funds-flow statement below is not applicable._\n")
 
